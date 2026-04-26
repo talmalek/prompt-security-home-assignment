@@ -188,13 +188,13 @@ Optional repository **Variables** (defaults match vendor assignment):
 - **CI workflow:** [github.com/talmalek/prompt-security-home-assignment/actions](https://github.com/talmalek/prompt-security-home-assignment/actions/workflows/ci.yml)
 - **Latest run:** see the Actions tab — 8 tests total: 6 passed + 2 expected failures (demo).
 - **Allure report (GitHub Pages):** <https://talmalek.github.io/prompt-security-home-assignment/>
-- **Notion stakeholder dashboard:** *"QA Automation Test Runs (Prompt Security)"* — every CI run on `main` appends one row (status, duration, branch/commit, links to CI run + Allure report).
+- **Notion stakeholder dashboard:** [QA Automation Test Runs (Prompt Security)](https://nickel-guide-250.notion.site/QA-Automation-Test-Runs-Prompt-Security-34e30027917080b2be80efea0c3c55ec) — every CI run on `main` appends one row (status, duration, branch/commit, links to CI run + Allure report).
 
 ---
 
 ## Notion stakeholder dashboard
 
-Lightweight reporter that posts one row per CI run to a Notion *Test Runs* database.
+Lightweight reporter that posts one row per CI run to the [QA Automation Test Runs (Prompt Security)](https://nickel-guide-250.notion.site/QA-Automation-Test-Runs-Prompt-Security-34e30027917080b2be80efea0c3c55ec) Notion database.
 **Opt-in and fail-open** — a Notion outage never fails CI (`continue-on-error: true`
 plus `if: env.NOTION_TOKEN != ''` gating).
 
