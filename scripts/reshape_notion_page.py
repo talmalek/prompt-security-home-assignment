@@ -42,13 +42,13 @@ from utils.notion_client import (  # noqa: E402
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
-PAGE_ID = "f8430027-9170-8369-a89c-81f378fc5314"
+PAGE_ID = "34e30027-9170-80b2-be80-efea0c3c55ec"
 
-PAGE_TITLE = "QA Automation Test Run Update"
-PAGE_ICON_EMOJI = "🧪"
+PAGE_TITLE = "QA Automation Test Runs (Prompt Security)"
+PAGE_ICON_EMOJI = "🛡️"
 
-REPO_URL = "https://github.com/talmalek/BoilerPlate_HomeAssignment"
-ALLURE_URL = "https://talmalek.github.io/BoilerPlate_HomeAssignment/"
+REPO_URL = "https://github.com/talmalek/prompt-security-home-assignment"
+ALLURE_URL = "https://talmalek.github.io/prompt-security-home-assignment/"
 CI_URL = f"{REPO_URL}/actions/workflows/ci.yml"
 
 STATUS_OPTION_COLORS: dict[str, str] = {
@@ -57,7 +57,11 @@ STATUS_OPTION_COLORS: dict[str, str] = {
     STATUS_FAILED: "red",
 }
 
-NARRATIVE_MARKER = "Automated UI test results for "
+# Marker chosen to appear ONLY in the new (Prompt Security) narrative, so that
+# re-running this script after a duplicate from the boilerplate page (which has
+# its own "Automated UI test results for Sauce Demo …" paragraph) treats the
+# old narrative as stale and replaces it with this repo's curated copy.
+NARRATIVE_MARKER = "Prompt Security browser extension policy enforcement"
 
 
 def _rt(text: str, *, bold: bool = False, link: str | None = None) -> dict[str, Any]:
@@ -111,7 +115,7 @@ def _new_narrative() -> list[dict[str, Any]]:
         _paragraph(
             [
                 _rt("Automated UI test results for "),
-                _rt("Sauce Demo", bold=True),
+                _rt("Prompt Security browser extension policy enforcement", bold=True),
                 _rt(
                     " — each row below is one CI run, with direct links to Allure and "
                     "GitHub Actions for engineer drill-down."
@@ -122,19 +126,56 @@ def _new_narrative() -> list[dict[str, Any]]:
         _heading_2("🔎 Scope", color="blue_background"),
         _bullet(
             [
-                _rt("Application under test: "),
-                _rt("Sauce Demo", bold=True, link="https://www.saucedemo.com/"),
+                _rt("Application under test: the "),
+                _rt(
+                    "Prompt Security Chrome extension",
+                    bold=True,
+                    link="https://chromewebstore.google.com/detail/prompt-security-browser-e/iidnankcocecmgpcafggbgbmkbcldmno",
+                ),
+                _rt(" enforcing administrator policy on web GenAI apps."),
             ]
         ),
-        _bullet([_rt("Runner: GitHub Actions · Ubuntu · Python 3.12 · headless Chromium")]),
-        _bullet([_rt("Framework: Pytest + async Playwright + Page Object Model + Allure")]),
-        _heading_2("✅ Coverage", color="green_background"),
-        _bullet([_rt("Authentication: valid login, locked user, invalid password")]),
         _bullet(
             [
-                _rt("Intentional failure-demo test that showcases screenshot capture and error reporting — it is "),
-                _rt("expected to fail", bold=True),
-                _rt(" on every run."),
+                _rt("Policy under test: "),
+                _rt("chatgpt.com", bold=True, link="https://chatgpt.com/"),
+                _rt(" allowed · "),
+                _rt("gemini.google.com", bold=True, link="https://gemini.google.com/"),
+                _rt(" blocked."),
+            ]
+        ),
+        _bullet(
+            [
+                _rt(
+                    "Runner: GitHub Actions · Ubuntu · Python 3.12 · headed Chromium under Xvfb "
+                    "(extension load requires headed mode)."
+                )
+            ]
+        ),
+        _bullet(
+            [
+                _rt(
+                    "Framework: Pytest + async Playwright (`launch_persistent_context` with "
+                    "`--load-extension`) + Page Object Model + Allure."
+                )
+            ]
+        ),
+        _heading_2("✅ Coverage", color="green_background"),
+        _bullet(
+            [
+                _rt("Positive: "),
+                _rt("chatgpt.com", bold=True),
+                _rt(" remains usable — page loads, prompt sends, assistant response renders."),
+            ]
+        ),
+        _bullet(
+            [
+                _rt("Negative: "),
+                _rt("gemini.google.com", bold=True),
+                _rt(
+                    " is blocked — detection via adaptive signals (Prompt Security block copy, "
+                    "disabled or missing input, no model response after a prompt attempt)."
+                ),
             ]
         ),
         _toggle(
@@ -144,13 +185,19 @@ def _new_narrative() -> list[dict[str, Any]]:
                 _bullet(
                     [
                         _rt(STATUS_KNOWN_FAILURES, bold=True),
-                        _rt(" — some tests failed (includes the intentional failure-demo)"),
+                        _rt(
+                            " — at least one test failed (typically third-party UI drift on "
+                            "ChatGPT/Gemini); the run still produced useful Allure signal"
+                        ),
                     ]
                 ),
                 _bullet(
                     [
                         _rt(STATUS_FAILED, bold=True),
-                        _rt(" — no tests passed (would indicate an outage or major regression)"),
+                        _rt(
+                            " — no tests passed (extension/runner infra problem or major "
+                            "regression — investigate first)"
+                        ),
                     ]
                 ),
             ],
