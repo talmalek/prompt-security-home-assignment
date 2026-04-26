@@ -12,10 +12,12 @@ Both fixtures share their entire lifecycle (launch, tracing, teardown) via
 :func:`_persistent_context_lifecycle`; the only differences are
 ``--load-extension`` flags and a one-time popup configuration step.
 
-Tests open their own tabs via ``self.context.new_page()`` (one tab per scenario),
-which keeps the in-class flow visible (tab1/tab2/tab3) and matches the
-assignment requirement to verify policy across multiple GenAI hosts in a single
-browser session.
+Tests open their own tabs via the ``_open_tab`` helper in
+``tests/ui/test_policy_enforcement.py`` (one tab per scenario), which keeps the
+in-class flow visible (tab1/tab2/tab3) and matches the assignment requirement
+to verify policy across multiple GenAI hosts in a single browser session. The
+first tab reuses Chromium's startup ``about:blank`` page so the visible tab
+numbering aligns with the Allure step labels.
 """
 
 from __future__ import annotations

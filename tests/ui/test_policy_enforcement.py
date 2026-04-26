@@ -19,9 +19,11 @@ Six end-to-end scenarios in two classes (one per browser fixture):
     with the *Access Denied* DOM and a *Powered by: prompt.security* footer.
   * Claude AI — blocked: same overlay, ``domain=claude.ai``.
 
-Each test opens its own tab via ``self.context.new_page()`` so the visible
-browser window literally contains *tab1 / tab2 / tab3* as required by the
-assignment.
+Each test opens its own tab via :func:`_open_tab` so the visible browser
+window literally contains *tab1 / tab2 / tab3* as required by the assignment.
+The first tab reuses Chromium's startup ``about:blank`` page (a persistent
+context always boots with one) so tab numbering aligns with the visual
+position of the tabs in the window.
 """
 
 from __future__ import annotations
@@ -46,9 +48,23 @@ def _attach_snapshot(snap: dict, *, name: str) -> None:
 
 
 async def _open_tab(context, *, tab_index: int):
-    """Create a new tab in the shared persistent context and apply project-wide timeouts."""
-    with allure.step(f"[tab {tab_index}] Open a new browser tab in the shared context"):
-        page = await context.new_page()
+    """Open a tab in the shared persistent context and apply project-wide timeouts.
+
+    ``launch_persistent_context`` always boots Chromium with a single
+    ``about:blank`` page — there is no flag to suppress it.  To keep the visible
+    tab numbering aligned with the Allure step labels (so "tab 1" really is the
+    leftmost tab in the window), the first call reuses that initial blank page
+    instead of opening a new one.  Subsequent calls open fresh tabs as usual.
+    """
+    label = f"[tab {tab_index}] Open a new browser tab in the shared context"
+    with allure.step(label):
+        page = None
+        for existing in context.pages:
+            if existing.url == "about:blank":
+                page = existing
+                break
+        if page is None:
+            page = await context.new_page()
         page.set_default_timeout(settings.test.default_timeout_ms)
         page.set_default_navigation_timeout(60_000)
     return page
