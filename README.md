@@ -62,7 +62,7 @@ Optional repository **Variables** (defaults in code match the vendor assignment)
 ### Submission links
 
 - **CI workflow:** [github.com/talmalek/prompt-security-home-assignment/actions/workflows/ci.yml](https://github.com/talmalek/prompt-security-home-assignment/actions/workflows/ci.yml)
-- **Latest green run:** [run #24953945519](https://github.com/talmalek/prompt-security-home-assignment/actions/runs/24953945519) — `2 passed` (`test_chatgpt_is_allowed`, `test_gemini_is_blocked`); also publishes a row to the Notion dashboard below.
+- **Latest green run:** [run #24954324442](https://github.com/talmalek/prompt-security-home-assignment/actions/runs/24954324442) — `2 passed`. Gemini block assertion proves extension enforcement: navigation lands on `chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com`, with DOM markers (`Access Denied` title + `Powered by:` link to `prompt.security`) attached as Allure evidence. Same run posts a row to the Notion dashboard.
 - **Allure report (GitHub Pages):** <https://talmalek.github.io/prompt-security-home-assignment/> — published by [`.github/workflows/allure-report.yml`](.github/workflows/allure-report.yml) after every CI run on `main`.
 - **Notion stakeholder dashboard:** *“QA Automation Test Runs (Prompt Security)”* in the Tal Malek Notion workspace — every CI run on `main` appends one row (status, duration, branch/commit, links to the CI run + Allure report). Page is workspace-private by default; enable **Share → Publish to web** to expose externally.
 
