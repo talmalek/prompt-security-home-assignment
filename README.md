@@ -62,20 +62,30 @@ Optional repository **Variables** (defaults in code match the vendor assignment)
 ### Submission links
 
 - **CI workflow:** [github.com/talmalek/prompt-security-home-assignment/actions/workflows/ci.yml](https://github.com/talmalek/prompt-security-home-assignment/actions/workflows/ci.yml)
-- **Latest green run:** [run #24952738301](https://github.com/talmalek/prompt-security-home-assignment/actions/runs/24952738301) — `2 passed` (`test_chatgpt_is_allowed`, `test_gemini_is_blocked`).
+- **Latest green run:** [run #24953945519](https://github.com/talmalek/prompt-security-home-assignment/actions/runs/24953945519) — `2 passed` (`test_chatgpt_is_allowed`, `test_gemini_is_blocked`); also publishes a row to the Notion dashboard below.
 - **Allure report (GitHub Pages):** <https://talmalek.github.io/prompt-security-home-assignment/> — published by [`.github/workflows/allure-report.yml`](.github/workflows/allure-report.yml) after every CI run on `main`.
+- **Notion stakeholder dashboard:** *“QA Automation Test Runs (Prompt Security)”* in the Tal Malek Notion workspace — every CI run on `main` appends one row (status, duration, branch/commit, links to the CI run + Allure report). Page is workspace-private by default; enable **Share → Publish to web** to expose externally.
 
-## Notion stakeholder dashboard (new repo)
+## Notion stakeholder dashboard
 
-Use a **new** Notion integration and database for this repository (do not reuse the boilerplate’s production dashboard unless you intend to).
+Lightweight reporter that posts one row per CI run to a Notion *Test Runs* database. **Opt-in and fail-open** — a Notion outage never fails CI (`continue-on-error: true` plus `if: env.NOTION_TOKEN != ''` gating).
 
-1. Create an integration at [Notion → Integrations](https://www.notion.so/profile/integrations) → copy `NOTION_TOKEN` (`ntn_…`).
-2. Duplicate or create a **Test Runs** database; share it with the integration.
-3. GitHub: Secret `NOTION_TOKEN`, Variables `NOTION_RUNS_DATABASE_ID`, `ALLURE_PAGES_URL`.
-4. Locally: `uv run python scripts/smoke_notion.py` to verify schema.
-5. Optionally once: `uv run python scripts/reshape_notion_page.py` (curates page copy; **not** for CI).
+| Where | What |
+|---|---|
+| `utils/notion_client.py` | Async httpx + tenacity wrapper; `TestRunRow` pydantic model. |
+| `utils/pytest_summary.py` | Zero-dep pytest plugin → writes `reports/summary.json`. |
+| `scripts/push_to_notion.py` | CI publisher (also runs locally). Always exits 0. |
+| `scripts/smoke_notion.py` | Read-only schema/auth pre-flight. |
+| `scripts/reshape_notion_page.py` | One-off page curator — idempotent, **not** in CI. |
 
-The reshape script still references “Sauce Demo” in template text — update your Notion page manually or adjust that script only for this product (it is a one-off curator).
+To wire a fresh page yourself:
+
+1. Create an internal integration at [Notion → Integrations](https://www.notion.so/profile/integrations) (workspace owner permissions).
+2. Duplicate the curated page (or create one with a `Test Runs` database whose schema matches `scripts/smoke_notion.py`).
+3. Open the page → **⋯ → Connections → Add connections → confirm** (this is the step most often missed).
+4. GitHub: Secret `NOTION_TOKEN`, Variables `NOTION_RUNS_DATABASE_ID`, `ALLURE_PAGES_URL`.
+5. Locally validate, then publish: `uv run python scripts/smoke_notion.py && uv run python scripts/push_to_notion.py`.
+6. Optionally re-curate the page narrative for your repo: `uv run python scripts/reshape_notion_page.py` (update `PAGE_ID`, `REPO_URL`, `ALLURE_URL` constants first).
 
 ## Test design notes
 
