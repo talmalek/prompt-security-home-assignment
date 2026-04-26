@@ -57,11 +57,10 @@ STATUS_OPTION_COLORS: dict[str, str] = {
     STATUS_FAILED: "red",
 }
 
-# Marker chosen to appear ONLY in the new (Prompt Security) narrative, so that
-# re-running this script after a duplicate from the boilerplate page (which has
-# its own "Automated UI test results for Sauce Demo …" paragraph) treats the
-# old narrative as stale and replaces it with this repo's curated copy.
-NARRATIVE_MARKER = "Prompt Security browser extension policy enforcement"
+# Marker chosen to appear ONLY in the latest narrative version.  Changing this
+# string forces a full re-insertion on the next run (old blocks are archived by
+# _archive_stale_blocks since they no longer match our_ids).
+NARRATIVE_MARKER = "6 passing · 2 intentional-failure demo"
 
 
 def _rt(text: str, *, bold: bool = False, link: str | None = None) -> dict[str, Any]:
@@ -117,7 +116,9 @@ def _new_narrative() -> list[dict[str, Any]]:
                 _rt("Automated UI test results for "),
                 _rt("Prompt Security browser extension policy enforcement", bold=True),
                 _rt(
-                    " — each row below is one CI run, with direct links to Allure and "
+                    " — 8 test scenarios total: "
+                    "6 passing · 2 intentional-failure demo. "
+                    "Each row below is one CI run, with direct links to Allure and "
                     "GitHub Actions for engineer drill-down."
                 ),
             ],
@@ -141,6 +142,8 @@ def _new_narrative() -> list[dict[str, Any]]:
                 _rt("chatgpt.com", bold=True, link="https://chatgpt.com/"),
                 _rt(" allowed · "),
                 _rt("gemini.google.com", bold=True, link="https://gemini.google.com/"),
+                _rt(" blocked · "),
+                _rt("claude.ai", bold=True, link="https://claude.ai/"),
                 _rt(" blocked."),
             ]
         ),
@@ -163,31 +166,58 @@ def _new_narrative() -> list[dict[str, Any]]:
         _heading_2("✅ Coverage", color="green_background"),
         _bullet(
             [
-                _rt("Positive: "),
-                _rt("chatgpt.com", bold=True),
-                _rt(" remains usable — page loads, prompt sends, assistant response renders."),
+                _rt("Baseline (3 tests, no extension): "),
+                _rt("ChatGPT · Gemini · Claude AI", bold=True),
+                _rt(
+                    " each load normally in separate tabs — proves blocks observed in the "
+                    "next class are caused by the extension, not the environment."
+                ),
             ]
         ),
         _bullet(
             [
-                _rt("Negative: "),
+                _rt("Extension installed — allow (1 test): "),
+                _rt("chatgpt.com", bold=True),
+                _rt(" loads normally — confirms allow-list policy is respected."),
+            ]
+        ),
+        _bullet(
+            [
+                _rt("Extension installed — block (2 tests): "),
                 _rt("gemini.google.com", bold=True),
+                _rt(" and "),
+                _rt("claude.ai", bold=True),
                 _rt(
-                    " is blocked — detection via adaptive signals (Prompt Security block copy, "
-                    "disabled or missing input, no model response after a prompt attempt)."
+                    " each land on the Prompt Security Access Denied overlay "
+                    "(`chrome-extension://<id>/html/pageOverlay.html?type=blockPage&domain=…`). "
+                    "Assertions key off parsed URL query params — not fragile DOM text."
+                ),
+            ]
+        ),
+        _bullet(
+            [
+                _rt("Failure pipeline demo (2 tests, "),
+                _rt("expected to fail", bold=True),
+                _rt(
+                    "): same block assertions run against an extension configured with an "
+                    "open-policy API key (no block rules). The sites load normally so the "
+                    "assertions fail — triggering failure screenshots, page source, and "
+                    "Playwright trace attachments in Allure. CI stays green via "
+                    "`continue-on-error: true`."
                 ),
             ]
         ),
         _toggle(
             [_rt("📖 How to read the Status column", bold=True)],
             [
-                _bullet([_rt(STATUS_DONE, bold=True), _rt(" — every test passed")]),
+                _bullet([_rt(STATUS_DONE, bold=True), _rt(" — all 6 production tests passed")]),
                 _bullet(
                     [
                         _rt(STATUS_KNOWN_FAILURES, bold=True),
                         _rt(
-                            " — at least one test failed (typically third-party UI drift on "
-                            "ChatGPT/Gemini); the run still produced useful Allure signal"
+                            " — one or more production tests failed (third-party UI drift / "
+                            "network issue). The 2 intentional-failure demo tests always appear "
+                            "as failures and are expected — they demonstrate the reporting pipeline."
                         ),
                     ]
                 ),
@@ -195,8 +225,8 @@ def _new_narrative() -> list[dict[str, Any]]:
                     [
                         _rt(STATUS_FAILED, bold=True),
                         _rt(
-                            " — no tests passed (extension/runner infra problem or major "
-                            "regression — investigate first)"
+                            " — no tests passed (extension/runner infrastructure problem or "
+                            "major regression — investigate immediately)"
                         ),
                     ]
                 ),
