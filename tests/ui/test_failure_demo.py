@@ -73,6 +73,7 @@ from pydantic import SecretStr
 from tests.conftest import _persistent_context_lifecycle
 from tests.pages.web_app_page import CLAUDE, GEMINI
 from tests.ui.test_policy_enforcement import run_block_assertion
+from utils.logger import logger
 from utils.soft_assert import SoftAssert
 
 # Intentional hard-code: a real Prompt Security API key that has *no block rules*
@@ -172,6 +173,7 @@ class TestFailureDemo:
         4. Assert final URL scheme is chrome-extension (INTENTIONALLY WRONG — causes this test to fail)
         5. Actual: scheme is https — site loaded normally; block-overlay never appeared
         """
+        logger.info("Running failure demo: Gemini block assertion (expecting failure)")
         await run_block_assertion(self, GEMINI, tab_index=1)
 
     @allure.title("[DEMO / EXPECTED FAIL] Open-policy extension — Claude AI loads despite block assertion (tab 2)")
@@ -196,4 +198,5 @@ class TestFailureDemo:
         4. Assert final URL scheme is chrome-extension (INTENTIONALLY WRONG — causes this test to fail)
         5. Actual: scheme is https — site loaded normally; block-overlay never appeared
         """
+        logger.info("Running failure demo: Claude AI block assertion (expecting failure)")
         await run_block_assertion(self, CLAUDE, tab_index=2)

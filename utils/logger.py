@@ -30,4 +30,4 @@ def get_logger(name: str | None = None) -> Any:
 
 
 configure_logging()
-logger = get_logger("qa_boilerplate")
+logger = get_logger("prompt_security")
