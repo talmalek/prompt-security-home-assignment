@@ -87,5 +87,5 @@ markers = [
     "regression: marks tests as regression tests",
     "ui: UI tests",
     "api: API tests",
-    "demo: intentional-failure tests for failure-reporting pipeline verification (excluded from CI)",
+    "demo: intentional-failure tests for failure-reporting pipeline verification (runs in CI; non-blocking via continue-on-error)",
 ]

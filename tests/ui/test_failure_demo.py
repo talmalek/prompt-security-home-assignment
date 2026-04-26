@@ -34,9 +34,10 @@ block-overlay assertion fires and produces the failure evidence.
 
 Marker & CI
 -----------
-All tests in this file carry ``@pytest.mark.demo``.  CI runs
-``pytest -m "not demo"`` so these intentional failures never turn the
-submission green → red.
+All tests in this file carry ``@pytest.mark.demo``.  CI runs the full
+suite including these tests; the pytest step uses ``continue-on-error: true``
+so intentional failures never turn the overall workflow red.  A
+``::warning::`` annotation is emitted in the CI log when any test fails.
 
 Run locally (intentional failures + failure-screenshot evidence)::
 
@@ -53,7 +54,6 @@ To remove the demo entirely:
 3.  In ``tests/conftest.py``: delete the ``api_key_override`` keyword argument
     and its surrounding lines (≈ 5-line diff).
 4.  In ``pyproject.toml``: remove the ``demo: …`` marker line.
-5.  In ``.github/workflows/ci.yml``: remove ``-m "not demo"`` from the pytest command.
 
 Nothing else changes — the production test classes are completely unaffected.
 """
