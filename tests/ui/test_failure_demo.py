@@ -16,7 +16,10 @@ How it works
 ------------
 The ``browser_context_with_open_extension`` fixture is identical to
 ``browser_context_with_extension`` except the popup is configured with a
-**hardcoded open-policy key** that has no block rules on the backend.
+**hardcoded open-policy key** — a real Prompt Security API key that has no
+block rules on its tenant.  The extension authenticates successfully but
+receives an empty policy, so it defaults to "allow all" and never shows the
+block overlay.
 
 ``TestFailureDemo`` is a **standalone** class (no inheritance from
 ``TestWithExtension``).  It calls :func:`run_block_assertion` — the
@@ -72,12 +75,13 @@ from tests.pages.web_app_page import CLAUDE, GEMINI
 from tests.ui.test_policy_enforcement import run_block_assertion
 from utils.soft_assert import SoftAssert
 
-# Intentional hard-code: a deliberately bogus (invalid) UUID used as the API key.
-# The Prompt Security backend rejects it, so the extension receives no block rules
-# and defaults to "allow all" — Gemini and Claude AI load normally, which is exactly
-# what makes the block assertions fail.  This value is not a secret and is safe to
-# commit.
-_OPEN_POLICY_API_KEY = SecretStr("00000000-0000-0000-0000-000000000000")
+# Intentional hard-code: a real Prompt Security API key that has *no block rules*
+# configured on its tenant.  The extension authenticates successfully but receives
+# an empty policy, so it defaults to "allow all" — Gemini and Claude AI load
+# normally, which is exactly what makes the block assertions fail.
+# This key is intentionally committed for demo/interview purposes (open repo).
+# It has no sensitive policy data associated with it.
+_OPEN_POLICY_API_KEY = SecretStr("cc6a6cfc-9570-4e5a-b6ea-92d2adac90e4")
 _OPEN_POLICY_API_DOMAIN = "eu.prompt.security"
 
 
@@ -150,21 +154,20 @@ class TestFailureDemo:
     @allure.title("[DEMO / EXPECTED FAIL] Open-policy extension — Gemini loads despite block assertion (tab 1)")
     @allure.description(
         "**Purpose:** Verify failure-reporting pipeline: Allure step diff, failure screenshot, page source.\n\n"
-        "**Extension API key:** Bogus (invalid UUID `00000000-…`). The backend rejects "
-        "authentication, so the extension receives no block rules and defaults to "
-        "'allow all' — Gemini loads normally.\n\n"
+        "**Extension API key:** Open-policy key (`cc6a6cfc-…`) — authenticates successfully but has no "
+        "block rules configured on its tenant, so the extension defaults to 'allow all' — Gemini loads normally.\n\n"
         "**Expected by assertion (intentionally wrong):** Extension overlay at "
         "`chrome-extension://…/pageOverlay.html?type=blockPage&domain=gemini.google.com`.\n\n"
         "**Actual:** Site loads normally — final URL scheme is `https`, not `chrome-extension`.\n\n"
-        "**⚠ This test MUST fail.** A pass would indicate the bogus key somehow resolves "
-        "to a block-policy tenant, which requires investigation."
+        "**⚠ This test MUST fail.** A pass would indicate the open-policy key now has a block rule, "
+        "which requires investigation."
     )
     async def test_gemini_blocked_open_policy_in_tab1(self) -> None:
         """[EXPECTED FAIL] Open-policy extension: Gemini loads instead of showing block overlay (tab 1).
 
         Steps:
-        1. Open a new browser tab (tab 1) — extension loaded with bogus (invalid UUID) API key
-        2. Navigate to https://gemini.google.com/ — backend rejects the key, extension has no block rules
+        1. Open a new browser tab (tab 1) — extension loaded with open-policy API key (no block rules)
+        2. Navigate to https://gemini.google.com/ — extension authenticates but has no block rules
         3. Wait for post-navigation state to settle
         4. Assert final URL scheme is chrome-extension (INTENTIONALLY WRONG — causes this test to fail)
         5. Actual: scheme is https — site loaded normally; block-overlay never appeared
@@ -174,22 +177,21 @@ class TestFailureDemo:
     @allure.title("[DEMO / EXPECTED FAIL] Open-policy extension — Claude AI loads despite block assertion (tab 2)")
     @allure.description(
         "**Purpose:** Verify failure-reporting pipeline: Allure step diff, failure screenshot, page source.\n\n"
-        "**Extension API key:** Bogus (invalid UUID `00000000-…`). The backend rejects "
-        "authentication, so the extension receives no block rules and defaults to "
-        "'allow all' — Claude AI loads normally.\n\n"
+        "**Extension API key:** Open-policy key (`cc6a6cfc-…`) — authenticates successfully but has no "
+        "block rules configured on its tenant, so the extension defaults to 'allow all' — Claude AI loads normally.\n\n"
         "**Action:** Open tab 2 → navigate to https://claude.ai/.\n\n"
         "**Expected by assertion (intentionally wrong):** Extension overlay at "
         "`chrome-extension://…/pageOverlay.html?type=blockPage&domain=claude.ai`.\n\n"
         "**Actual:** Site loads normally — final URL scheme is `https`, not `chrome-extension`.\n\n"
-        "**⚠ This test MUST fail.** A pass would indicate the bogus key somehow resolves "
-        "to a block-policy tenant, which requires investigation."
+        "**⚠ This test MUST fail.** A pass would indicate the open-policy key now has a block rule, "
+        "which requires investigation."
     )
     async def test_claude_blocked_open_policy_in_tab2(self) -> None:
         """[EXPECTED FAIL] Open-policy extension: Claude AI loads instead of showing block overlay (tab 2).
 
         Steps:
-        1. Open a new browser tab (tab 2) — extension loaded with bogus (invalid UUID) API key
-        2. Navigate to https://claude.ai/ — backend rejects the key, extension has no block rules
+        1. Open a new browser tab (tab 2) — extension loaded with open-policy API key (no block rules)
+        2. Navigate to https://claude.ai/ — extension authenticates but has no block rules
         3. Wait for post-navigation state to settle
         4. Assert final URL scheme is chrome-extension (INTENTIONALLY WRONG — causes this test to fail)
         5. Actual: scheme is https — site loaded normally; block-overlay never appeared
