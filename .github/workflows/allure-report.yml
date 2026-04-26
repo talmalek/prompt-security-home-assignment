@@ -1,0 +1,130 @@
+name: Allure GitHub Pages
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  actions: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: allure-pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Redeploy when CI ran on the default branch from a push OR from Actions → "Run workflow".
+    # Skips: pull_request CI (different event), pushes to other branches, cancelled runs.
+    if: |
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch
+    environment:
+      name: github-pages
+    steps:
+      - name: Download allure-results from CI run
+        id: download
+        continue-on-error: true
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: allure-results
+          path: allure-results
+          run_id: ${{ github.event.workflow_run.id }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if no results
+        id: check
+        run: |
+          if [ ! "$(ls -A allure-results 2>/dev/null)" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Trends/history: merge prior report history into allure-results before generate (see Allure docs).
+      # Pages from deploy-pages are not on a git branch; we persist _site/history via actions/cache between runs.
+      - name: Restore Allure history for trends
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/cache@v4
+        with:
+          path: .allure-history
+          key: allure-history-${{ github.run_id }}
+          restore-keys: |
+            allure-history-
+
+      - name: Merge previous history into allure-results
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          if [ -d .allure-history/history ] && [ "$(ls -A .allure-history/history 2>/dev/null)" ]; then
+            mkdir -p allure-results
+            rm -rf allure-results/history
+            cp -r .allure-history/history allure-results/history
+          fi
+
+      - name: Install Allure and generate site
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          curl -Ls https://github.com/allure-framework/allure2/releases/download/2.27.0/allure-2.27.0.tgz -o allure.tgz
+          tar -xzf allure.tgz
+          chmod +x allure-2.27.0/bin/allure
+          ./allure-2.27.0/bin/allure generate allure-results -o _site --clean
+
+      - name: Persist Allure history for next deploy
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          if [ -d _site/history ]; then
+            mkdir -p .allure-history
+            rm -rf .allure-history/history
+            cp -r _site/history .allure-history/history
+          fi
+
+      - name: Configure Pages
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      # GitHub Pages occasionally returns a transient "Deployment failed, try again later"
+      # during platform incidents (artifact uploads fine, publish step fails or hangs in
+      # `syncing_files` with no detail). Retry up to three times before surfacing a failure
+      # so a bad hour at GitHub doesn't leave the public site stuck on a stale Allure report.
+      #
+      # `timeout: 300000` (5 min) overrides the action's 10-min default — a stuck attempt
+      # falls through to the retry faster so the job completes in reasonable time even when
+      # Pages is degraded.
+      #
+      # `outcome != 'success'` retries on both `failure` and `cancelled` step outcomes
+      # (e.g. deploy-pages self-cancelling on error). A job-level cancel still terminates
+      # everything, which is the correct behaviour.
+      - name: Deploy to GitHub Pages (attempt 1)
+        if: steps.check.outputs.skip == 'false'
+        id: deploy1
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+        with:
+          timeout: 300000
+
+      - name: Deploy to GitHub Pages (attempt 2)
+        if: steps.check.outputs.skip == 'false' && steps.deploy1.outcome != 'success'
+        id: deploy2
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+        with:
+          timeout: 300000
+
+      - name: Deploy to GitHub Pages (attempt 3)
+        if: steps.check.outputs.skip == 'false' && steps.deploy1.outcome != 'success' && steps.deploy2.outcome != 'success'
+        id: deploy
+        uses: actions/deploy-pages@v4
+        with:
+          timeout: 300000

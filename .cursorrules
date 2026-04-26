@@ -1,0 +1,58 @@
+# Prompt Security extension QA — Cursor Rules
+
+## Project overview
+Python 3.12+ automation for the **Prompt Security Browser Extension** GenAI allow/block policy: **async Playwright** with Chromium **`launch_persistent_context`** and `--load-extension`, **pytest**, **Allure**, **POM**, **uv**, **pydantic-settings**. Optional **Notion** stakeholder dashboard (same pattern as the parent boilerplate).
+
+## Python and style
+- Use Python 3.12+ features and type hints throughout.
+- Max line length: 120. Double quotes. 4-space indent.
+- Run `ruff check` and `ruff format` before committing.
+- Imports: stdlib, third-party, local (`config`, `utils`, `tests`).
+
+## Page Object Model (POM)
+- Page objects live under `tests/pages/`. Prefer composition; `BasePage` is optional glue.
+- Use `@property` for element locators (lazy). Locators return Playwright `Locator`, not awaited values.
+- Prefer semantic locators: `get_by_role`, `get_by_text`, `get_by_label`, `get_by_placeholder` over fragile CSS.
+- Action methods are `async` and `await` Playwright calls.
+- Use smart waits (`wait_for`, `expect().to_be_visible()`) instead of fixed `wait_for_timeout` except short documented cases.
+
+## Tests
+- UI tests: `tests/ui/test_*.py`. Use `@pytest.mark.asyncio(loop_scope="class")` for class-scoped browser fixtures.
+- Markers: `smoke`, `regression`, `ui`, `api` (see `pyproject.toml`).
+- **Hard asserts** for preconditions that block the test. **Soft asserts** via `SoftAssert` for grouped checks; call `assert_all()` before declaring success (or in `teardown_method` if every test uses soft asserts consistently).
+- Wrap logical groups in `with self.checker.step("..."):` or `with allure.step("..."):` for readable reports.
+
+## Assertions and reporting
+- Use `allure.title`, `allure.description`, `allure.feature`, `allure.epic`, `allure.suite` where helpful.
+- `SoftAssert` integrates with `allure.step` — failed soft checks surface as step failures.
+
+## Logging
+- Use `from utils.logger import logger`.
+- Prefer structured logs: `logger.info("message", key=value)` — avoid f-strings for dynamic values when you want key=value in log aggregators.
+- Log before major actions: navigation, extension popup configuration, API calls, important assertions.
+- **Never** log secret values. `SecretStr.get_secret_value()` is only called at the last possible moment (e.g. building an `Authorization` header).
+
+## HTTP
+- Use **httpx** async clients with **tenacity** retries (transport + 429/5xx) — not `requests`.
+- `utils/notion_client.py` is the reference implementation for external-API wrappers: httpx + tenacity retries + pydantic payload models + context-manager lifecycle. Mirror its shape for new wrappers.
+- Validate URLs with `pydantic.AnyHttpUrl` when building external URLs.
+
+## Paths
+- Use `pathlib.Path` for filesystem paths.
+
+## Configuration & secrets
+- Read settings from `config.settings.settings` (env + `.env`). Do not hardcode secrets.
+- Every credential/token field in `config/settings.py` is wrapped in `pydantic.SecretStr` and has **no code default** — missing values must fail at startup, not fall back to placeholders.
+- `.env` is gitignored; `.env.example` holds only placeholders. Do not check in real values.
+- In CI, secrets come from **GitHub Secrets** (`PROMPT_SECURITY_API_KEY`, `NOTION_TOKEN`) and **Repository Variables** (`NOTION_RUNS_DATABASE_ID`, `ALLURE_PAGES_URL`). Rotate immediately if a token appears in a terminal or log.
+
+## Notion reporter (opt-in, fail-open)
+- `utils/pytest_summary.py` — zero-dependency pytest plugin that writes `reports/summary.json`. Must not make network calls and must not raise.
+- `utils/notion_client.py` — async API wrapper. Keep it narrow: `retrieve_database`, `create_run_row`, context-manager lifecycle. No pytest imports, no environment reads inside the wrapper.
+- `scripts/push_to_notion.py` — CI orchestration. Reads `reports/summary.json` + `GITHUB_*`, builds a `TestRunRow`, publishes one row. **Must always exit 0** regardless of API outcome — a Notion failure never breaks CI.
+- `scripts/smoke_notion.py` — local pre-flight for token/schema checks; read-only against the API.
+- `scripts/reshape_notion_page.py` — one-off, idempotent curator for the stakeholder page. **Do not run in CI.** It archives template placeholders and installs narrative blocks above the `Test Runs` child database; the DB must never be archived.
+- When adding fields to `TestRunRow`, update the Notion database schema first (or document manual steps) and re-run `scripts/smoke_notion.py` before pushing.
+
+## Out of scope for this boilerplate
+- No proprietary test-management integrations (TestRail, Xray, etc.). Extend per employer if needed; the Notion wrapper is the example pattern to mirror.

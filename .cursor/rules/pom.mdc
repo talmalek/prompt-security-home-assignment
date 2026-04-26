@@ -1,0 +1,11 @@
+---
+description: Page Object Model conventions
+globs: tests/pages/**/*.py
+---
+
+# Page Object Model
+
+- One class per page or major component. Name files `*_page.py`.
+- Locators are `@property` methods returning `Locator`.
+- No assertions inside page objects unless returning structured `dict` results for soft checks.
+- Navigation and user flows are explicit methods (`async def login(...)`).

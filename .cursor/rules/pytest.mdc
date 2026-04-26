@@ -1,0 +1,11 @@
+---
+description: Pytest + asyncio + Allure conventions
+globs: tests/**/*.py
+---
+
+# Pytest
+
+- UI tests: `@pytest.mark.asyncio(loop_scope="class")` + `@pytest.mark.usefixtures("browser_context")` when using the shared class browser.
+- Use markers: `smoke`, `regression`, `ui`, `api`.
+- Allure: `allure.title`, `allure.description`, `allure.step` for reviewer-friendly reports.
+- Soft assertions: instantiate `SoftAssert` in `setup_method` and call `assert_all()` in `teardown_method` or explicitly at end of test.

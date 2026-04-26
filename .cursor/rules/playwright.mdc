@@ -1,0 +1,11 @@
+---
+description: Async Playwright patterns for UI tests in this repo
+globs: tests/**/*.py
+---
+
+# Playwright (async)
+
+- Use `playwright.async_api` only. Page objects receive `Page` and expose `async` methods.
+- Prefer `expect(locator).to_*` assertions with timeouts over raw `wait_for_timeout`.
+- Class-scoped `browser_context` in `tests/conftest.py` launches **Chromium `launch_persistent_context`** with `--load-extension` (unpacked CRX under `extension/`), configures the popup (`#apiDomain`, `#apiKey`, `#saveButton`), then exposes `self.page`.
+- On failure, CI and hooks attach screenshots and page source where possible; traces are under `reports/traces/`.

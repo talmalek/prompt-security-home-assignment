@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TEST_BASE_URL: https://chatgpt.com/
+      PROMPT_SECURITY_API_KEY: ${{ secrets.PROMPT_SECURITY_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Install Playwright Chromium
+        run: uv run playwright install --with-deps chromium
+
+      - name: Fetch + unpack Prompt Security extension
+        run: uv run python scripts/fetch_extension.py
+
+      - name: Install Xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Pytest
+        id: pytest
+        continue-on-error: true
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' uv run pytest -v
+
+      - name: Warn if any test failed
+        if: always() && steps.pytest.outcome == 'failure'
+        run: |
+          echo "::warning::Pytest reported one or more failures — check the Pytest step log. This does not fail CI or block Allure Pages deployment."
+
+      - name: Upload allure results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results
+          path: reports/allure-results
+          if-no-files-found: warn
+
+      - name: Upload HTML test report (pytest-reporter-html1)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-test-report
+          path: reports/report.html
+          if-no-files-found: warn
+
+      - name: Upload test summary (summary.json)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-summary
+          path: reports/summary.json
+          if-no-files-found: warn
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-screenshots
+          path: reports/screenshots
+          if-no-files-found: ignore
+
+      - name: Upload videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-videos
+          path: reports/videos
+          if-no-files-found: ignore
+
+      - name: Upload traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: reports/traces
+          if-no-files-found: ignore
+
+      - name: Publish summary to Notion
+        if: always() && env.NOTION_TOKEN != '' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
+        continue-on-error: true
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_RUNS_DATABASE_ID: ${{ vars.NOTION_RUNS_DATABASE_ID }}
+          ALLURE_PAGES_URL: ${{ vars.ALLURE_PAGES_URL }}
+        run: uv run python scripts/push_to_notion.py

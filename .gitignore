@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.env
+!.env.example
+
+# uv
+.uv/
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/settings.json
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Browser extension (downloaded CRX unpack; do not commit vendor bits)
+extension/
+
+# Persistent Chromium profile for extension tests
+reports/.user-data/
+
+# Reports & artifacts (generated on each test run; keep dirs via .gitkeep)
+reports/report.html
+reports/summary.json
+reports/allure-results/*
+!reports/allure-results/.gitkeep
+reports/traces/*
+!reports/traces/.gitkeep
+reports/videos/*
+!reports/videos/.gitkeep
+reports/logs/*
+!reports/logs/.gitkeep
+reports/screenshots/*
+!reports/screenshots/.gitkeep
+# Optional: Allure CLI output at repo root (not reports/allure-results/)
+/allure-results/
+/allure-report/
+*.log
+
+# Playwright
+playwright-report/
+test-results/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+build/
+*.egg-info/

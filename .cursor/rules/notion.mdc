@@ -1,0 +1,38 @@
+---
+description: Conventions for the Notion API wrapper, pytest summary plugin, and CI publish/smoke/reshape scripts
+globs: utils/notion_client.py,utils/pytest_summary.py,scripts/*.py,config/settings.py
+---
+
+# Notion reporter & secrets
+
+This repo publishes an optional stakeholder dashboard to Notion. The reporter is **opt-in** and **fail-open** — a Notion outage must never turn a green test run red.
+
+## Secrets
+- Every credential/token in `config/settings.py` is wrapped in `pydantic.SecretStr`. No code defaults.
+- Call `SecretStr.get_secret_value()` at the last possible moment (e.g. building an `Authorization` header). Never log it, never interpolate into f-strings.
+- Local: gitignored `.env`. CI: GitHub Secrets (`PROMPT_SECURITY_API_KEY`, `NOTION_TOKEN`) and Variables (`NOTION_RUNS_DATABASE_ID`, `ALLURE_PAGES_URL`).
+- If a token leaks anywhere (terminal output, chat, log), rotate it immediately via [Notion → Integrations](https://www.notion.so/profile/integrations) and update the GitHub Secret.
+
+## `utils/notion_client.py` (API wrapper)
+- httpx (async) + tenacity retries + pydantic models. This file is the reference implementation for new external-API wrappers; new wrappers should mirror its shape.
+- Keep it **narrow**: database retrieval + row creation + context-manager lifecycle. No pytest imports. No `GITHUB_*` env reads. No payload building from environment.
+- `TestRunRow` / `TestRunRowBuilder` own the Notion payload translation (`to_notion_properties`). Adding a column means updating the model **and** the Notion database schema.
+
+## `utils/pytest_summary.py` (pytest plugin)
+- Zero dependencies. No network. Never raises.
+- Hooks: `pytest_sessionstart`, `pytest_runtest_logreport`, `pytest_sessionfinish`. Uses module-level state.
+- Writes `reports/summary.json` with counters, duration, `failed_tests`, marker breakdown.
+
+## `scripts/push_to_notion.py` (CI publisher)
+- Reads `reports/summary.json` + `GITHUB_*` env, builds a `TestRunRow`, calls the wrapper.
+- **Always exits 0.** Settings-gated (`settings.notion.enabled`). In CI, also gated by `if: env.NOTION_TOKEN != ''` + `continue-on-error: true`.
+- Adds repo root to `sys.path` at the top so it can run as a plain `python` script in CI.
+
+## `scripts/smoke_notion.py` (pre-flight)
+- Read-only: checks token validity and `Test Runs` database schema. Use before wiring CI or after any schema change.
+
+## `scripts/reshape_notion_page.py` (one-off page curator)
+- **Do not run in CI.** This is content-as-code, executed deliberately (like a DB migration).
+- Archives template placeholder blocks and inserts a curated stakeholder narrative above the `Test Runs` `child_database` block.
+- Idempotent — re-running restores the curated layout without duplicating content.
+- The `child_database` block must **never** be archived; every code path that deletes blocks must preserve it explicitly.
