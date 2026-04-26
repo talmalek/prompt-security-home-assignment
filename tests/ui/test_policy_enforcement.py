@@ -57,21 +57,36 @@ class TestGenAiPolicyEnforcement:
 
         logger.info("ChatGPT allowed flow completed")
 
-    @allure.title("Gemini — blocked site shows enforcement")
+    @allure.title("Gemini — blocked site shows enforcement (extension overlay)")
     @allure.description(
-        "Adaptive detection: block page / extension copy / disabled input / no model response after prompt."
+        "Asserts the navigation is intercepted by the Prompt Security extension and the user lands on "
+        "`chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&...`. "
+        "DOM markers (`Access Denied` title, `Powered by: prompt.security` footer link) are collected "
+        "best-effort and attached for review."
     )
     async def test_gemini_is_blocked(self) -> None:
         gem = GeminiPage(self.page)
         with allure.step("Open Gemini"):
             await gem.navigate()
 
-        with allure.step("Assess block patterns"):
+        with allure.step("Wait for extension block overlay"):
             evidence = await gem.assess_block()
 
         assert evidence is not None, (
-            f"Expected Gemini to be blocked by policy; no block heuristics matched. URL was: {gem.page.url}"
+            "Expected the Prompt Security extension to redirect to its block overlay "
+            "(chrome-extension://<id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com), "
+            f"but the active URL was: {gem.page.url}"
         )
+        assert evidence.reason == "extension_overlay_block", (
+            f"Block evidence is not extension-attributable: reason={evidence.reason!r} detail={evidence.detail!r}"
+        )
+
+        ext_id = getattr(self, "chrome_extension_id", None)
+        if ext_id:
+            assert f"extension_id={ext_id}" in evidence.detail, (
+                f"Overlay served by an unexpected extension id; expected {ext_id}, got detail={evidence.detail!r}"
+            )
+
         allure.attach(
             body=f"{evidence.reason}: {evidence.detail}",
             name="block_evidence",
