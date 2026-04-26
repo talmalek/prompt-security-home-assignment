@@ -59,13 +59,11 @@ Workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 Optional repository **Variables** (defaults in code match the vendor assignment): `PROMPT_SECURITY_API_DOMAIN` (`eu.prompt.security`), `CHROME_STORE_EXTENSION_ID` (only affects CRX download).
 
-### Successful pipeline link (submission)
+### Submission links
 
-After you push to GitHub and configure the secret above, open **Actions → CI → latest run** and paste the run URL into your submission. Optionally add it here:
-
-> **Latest green CI:** _(paste Actions run URL)_
-
-Allure on **GitHub Pages** still follows the companion workflow [`.github/workflows/allure-report.yml`](.github/workflows/allure-report.yml) (triggered after CI completes).
+- **CI workflow:** [github.com/talmalek/prompt-security-home-assignment/actions/workflows/ci.yml](https://github.com/talmalek/prompt-security-home-assignment/actions/workflows/ci.yml)
+- **Latest green run:** [run #24952738301](https://github.com/talmalek/prompt-security-home-assignment/actions/runs/24952738301) — `2 passed` (`test_chatgpt_is_allowed`, `test_gemini_is_blocked`).
+- **Allure report (GitHub Pages):** <https://talmalek.github.io/prompt-security-home-assignment/> — published by [`.github/workflows/allure-report.yml`](.github/workflows/allure-report.yml) after every CI run on `main`.
 
 ## Notion stakeholder dashboard (new repo)
 
