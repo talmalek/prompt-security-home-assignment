@@ -32,6 +32,24 @@ unpacked directory is referenced by two Chromium launch flags:
 
 This is done once per CI run (or `make extension` locally).
 
+> **Always testing the latest release.**
+> The download hits Google's own auto-update endpoint
+> (`clients2.google.com/service/update2/crx`) — the same URL Chrome uses for
+> extension updates — which always redirects to the **currently published CRX**.
+> Because `extension/` is git-ignored and never cached in CI, every workflow run
+> fetches a fresh copy automatically.  This means the test suite continuously
+> validates whatever version is live in the Chrome Web Store, catching regressions
+> introduced by new extension releases without any manual version pinning.
+>
+> **Local development behaviour.**
+> Locally, the script skips the download if `extension/manifest.json` already
+> exists.  This is intentional — it lets you write and debug tests against a
+> known-good extension version without an unexpected mid-session update changing
+> behaviour.  To pull the latest release explicitly, run:
+> ```bash
+> make extension   # equivalent to: uv run python scripts/fetch_extension.py --force
+> ```
+
 ### 2 — Browser context fixtures
 
 All fixtures are backed by a single shared lifecycle helper in `tests/conftest.py`:
