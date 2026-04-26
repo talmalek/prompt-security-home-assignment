@@ -98,6 +98,15 @@ class TestWithoutExtension:
         "policy enforcement, not to the network or the test environment."
     )
     async def test_chatgpt_loads_unblocked_in_tab1(self) -> None:
+        """Baseline: ChatGPT is reachable without the extension installed (tab 1).
+
+        Steps:
+        1. Open a new browser tab (tab 1) — plain Chromium, no extension loaded
+        2. Navigate to https://chatgpt.com/
+        3. Capture post-navigation state (final URL, scheme)
+        4. Assert final URL scheme is https/http, NOT chrome-extension (no block overlay)
+        5. Assert no block-overlay snapshot was recorded
+        """
         await self._open_in_tab_and_expect_unblocked(CHATGPT, tab_index=1)
 
     @allure.title("Without extension — Gemini loads in tab 2 (Result: No Block)")
@@ -109,6 +118,15 @@ class TestWithoutExtension:
         "The navigation must NOT land on `chrome-extension://…/pageOverlay.html`."
     )
     async def test_gemini_loads_unblocked_in_tab2(self) -> None:
+        """Baseline: Gemini is reachable without the extension installed (tab 2).
+
+        Steps:
+        1. Open a new browser tab (tab 2) — plain Chromium, no extension loaded
+        2. Navigate to https://gemini.google.com/
+        3. Capture post-navigation state (final URL may be accounts.google.com if signed out)
+        4. Assert final URL scheme is https/http, NOT chrome-extension (no block overlay)
+        5. Assert no block-overlay snapshot was recorded
+        """
         await self._open_in_tab_and_expect_unblocked(GEMINI, tab_index=2)
 
     @allure.title("Without extension — Claude AI loads in tab 3 (Result: No Block)")
@@ -119,6 +137,15 @@ class TestWithoutExtension:
         "The navigation must NOT land on `chrome-extension://…/pageOverlay.html`."
     )
     async def test_claude_loads_unblocked_in_tab3(self) -> None:
+        """Baseline: Claude AI is reachable without the extension installed (tab 3).
+
+        Steps:
+        1. Open a new browser tab (tab 3) — plain Chromium, no extension loaded
+        2. Navigate to https://claude.ai/
+        3. Capture post-navigation state (final URL is often Claude's login page)
+        4. Assert final URL scheme is https/http, NOT chrome-extension (no block overlay)
+        5. Assert no block-overlay snapshot was recorded
+        """
         await self._open_in_tab_and_expect_unblocked(CLAUDE, tab_index=3)
 
     async def _open_in_tab_and_expect_unblocked(self, site: GenAiAppSite, *, tab_index: int) -> None:
@@ -196,6 +223,15 @@ class TestWithExtension:
         "This proves the extension applies the *allow* rule rather than blocking everything."
     )
     async def test_chatgpt_loads_unblocked_in_tab1(self) -> None:
+        """With extension + allow policy: ChatGPT loads normally (tab 1).
+
+        Steps:
+        1. Open a new browser tab (tab 1) — extension is loaded and configured
+        2. Navigate to https://chatgpt.com/ (tenant policy: allow)
+        3. Capture post-navigation state (final URL, scheme)
+        4. Assert final URL scheme is https/http (NOT the extension block overlay)
+        5. Assert no block-overlay snapshot was recorded
+        """
         await self._open_in_tab_and_expect_unblocked(CHATGPT, tab_index=1)
 
     @allure.title("With extension — Gemini blocked in tab 2 (Result: Block — Access Denied overlay)")
@@ -215,6 +251,18 @@ class TestWithExtension:
         "Failing on parsed query params (vs. fragile DOM heuristics) makes the error message itself the diagnosis."
     )
     async def test_gemini_blocked_in_tab2(self) -> None:
+        """With extension + block policy: Gemini is intercepted by the Access Denied overlay (tab 2).
+
+        Steps:
+        1. Open a new browser tab (tab 2) — extension is loaded with the block-policy key
+        2. Navigate to https://gemini.google.com/ (tenant policy: block)
+        3. Wait for the extension's pageOverlay.html to settle (up to 2 s)
+        4. Assert final URL scheme is chrome-extension and path ends with /html/pageOverlay.html
+        5. Assert overlay served by the resolved runtime extension id (self.chrome_extension_id)
+        6. Assert query param type=blockPage
+        7. Assert query param domain=gemini.google.com
+        8. Assert DOM markers: #title-text contains "Denied", Powered by: prompt.security link
+        """
         await self._open_in_tab_and_expect_blocked(GEMINI, tab_index=2)
 
     @allure.title("With extension — Claude AI blocked in tab 3 (Result: Block — Access Denied overlay)")
@@ -228,6 +276,18 @@ class TestWithExtension:
         "with `domain=claude.ai`."
     )
     async def test_claude_blocked_in_tab3(self) -> None:
+        """With extension + block policy: Claude AI is intercepted by the Access Denied overlay (tab 3).
+
+        Steps:
+        1. Open a new browser tab (tab 3) — extension is loaded with the block-policy key
+        2. Navigate to https://claude.ai/ (tenant policy: block)
+        3. Wait for the extension's pageOverlay.html to settle (up to 2 s)
+        4. Assert final URL scheme is chrome-extension and path ends with /html/pageOverlay.html
+        5. Assert overlay served by the resolved runtime extension id (self.chrome_extension_id)
+        6. Assert query param type=blockPage
+        7. Assert query param domain=claude.ai
+        8. Assert DOM markers: #title-text contains "Denied", Powered by: prompt.security link
+        """
         await self._open_in_tab_and_expect_blocked(CLAUDE, tab_index=3)
 
     async def _open_in_tab_and_expect_unblocked(self, site: GenAiAppSite, *, tab_index: int) -> None:

@@ -160,6 +160,15 @@ class TestFailureDemo:
         "to a block-policy tenant, which requires investigation."
     )
     async def test_gemini_blocked_open_policy_in_tab1(self) -> None:
+        """[EXPECTED FAIL] Open-policy extension: Gemini loads instead of showing block overlay (tab 1).
+
+        Steps:
+        1. Open a new browser tab (tab 1) — extension loaded with bogus (invalid UUID) API key
+        2. Navigate to https://gemini.google.com/ — backend rejects the key, extension has no block rules
+        3. Wait for post-navigation state to settle
+        4. Assert final URL scheme is chrome-extension (INTENTIONALLY WRONG — causes this test to fail)
+        5. Actual: scheme is https — site loaded normally; block-overlay never appeared
+        """
         await run_block_assertion(self, GEMINI, tab_index=1)
 
     @allure.title("[DEMO / EXPECTED FAIL] Open-policy extension — Claude AI loads despite block assertion (tab 2)")
@@ -176,4 +185,13 @@ class TestFailureDemo:
         "to a block-policy tenant, which requires investigation."
     )
     async def test_claude_blocked_open_policy_in_tab2(self) -> None:
+        """[EXPECTED FAIL] Open-policy extension: Claude AI loads instead of showing block overlay (tab 2).
+
+        Steps:
+        1. Open a new browser tab (tab 2) — extension loaded with bogus (invalid UUID) API key
+        2. Navigate to https://claude.ai/ — backend rejects the key, extension has no block rules
+        3. Wait for post-navigation state to settle
+        4. Assert final URL scheme is chrome-extension (INTENTIONALLY WRONG — causes this test to fail)
+        5. Actual: scheme is https — site loaded normally; block-overlay never appeared
+        """
         await run_block_assertion(self, CLAUDE, tab_index=2)
