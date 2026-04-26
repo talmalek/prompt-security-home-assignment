@@ -65,7 +65,14 @@ Optional repository **Variables** (defaults in code match the vendor assignment)
 ### Submission links
 
 - **CI workflow:** [github.com/talmalek/prompt-security-home-assignment/actions/workflows/ci.yml](https://github.com/talmalek/prompt-security-home-assignment/actions/workflows/ci.yml)
-- **Latest green run:** [run #24954324442](https://github.com/talmalek/prompt-security-home-assignment/actions/runs/24954324442) — `2 passed`. Gemini block assertion proves extension enforcement: navigation lands on `chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com`, with DOM markers (`Access Denied` title + `Powered by:` link to `prompt.security`) attached as Allure evidence. Same run posts a row to the Notion dashboard.
+- **Latest green run:** [run #24954850200](https://github.com/talmalek/prompt-security-home-assignment/actions/runs/24954850200) — `6 passed in 27.18s`. The full baseline-vs-policy matrix runs in two pytest classes:
+
+  | Class (fixture) | Tab 1 — ChatGPT | Tab 2 — Gemini | Tab 3 — Claude AI |
+  |---|---|---|---|
+  | `TestWithoutExtension` (`browser_context_plain`) | ✅ no block | ✅ no block | ✅ no block |
+  | `TestWithExtension` (`browser_context_with_extension`) | ✅ no block (allow) | 🛑 BLOCK overlay | 🛑 BLOCK overlay |
+
+  Both block scenarios assert the navigation lands on `chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=<gemini.google.com\|claude.ai>`, with the runtime extension id matching `self.chrome_extension_id` and DOM markers (`Access Denied` title + `Powered by:` link to `prompt.security`) attached as Allure evidence. Same run posts a row to the Notion dashboard.
 - **Allure report (GitHub Pages):** <https://talmalek.github.io/prompt-security-home-assignment/> — published by [`.github/workflows/allure-report.yml`](.github/workflows/allure-report.yml) after every CI run on `main`.
 - **Notion stakeholder dashboard:** *“QA Automation Test Runs (Prompt Security)”* in the Tal Malek Notion workspace — every CI run on `main` appends one row (status, duration, branch/commit, links to the CI run + Allure report). Page is workspace-private by default; enable **Share → Publish to web** to expose externally.
 
