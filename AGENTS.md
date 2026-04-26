@@ -9,7 +9,7 @@ This repository automates **Prompt Security Browser Extension** policy checks: a
 4. Run `uv run pytest` to validate changes.
 
 ## Secrets policy (non-negotiable)
-- **Never** hardcode credentials, tokens, or API keys in source. `PROMPT_SECURITY_API_KEY` is a `pydantic.SecretStr` in `config/settings.py` (optional at import so `scripts/push_to_notion.py` can run without it; **required** when executing UI tests via the `browser_context` fixture).
+- **Never** hardcode credentials, tokens, or API keys in source. `PROMPT_SECURITY_API_KEY` is a `pydantic.SecretStr` in `config/settings.py` (optional at import so `scripts/push_to_notion.py` can run without it; **required** when executing UI tests via the `browser_context_with_extension` fixture).
 - Local development reads from a gitignored `.env`; [`.env.example`](.env.example) lists only placeholders.
 - CI reads from **GitHub Secrets** (masked) and **Repository Variables** (non-sensitive):
   - `PROMPT_SECURITY_API_KEY` → Secret (Prompt Security API key from the extension vendor).

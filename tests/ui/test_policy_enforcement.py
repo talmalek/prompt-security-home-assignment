@@ -1,25 +1,75 @@
-"""GenAI access policy: allow chatgpt.com, block gemini.google.com (Prompt Security extension)."""
+"""Web-based GenAI applications — block-connection policy enforcement.
+
+Six end-to-end scenarios in two classes (one per browser fixture):
+
+* :class:`TestWithoutExtension` — vanilla Chromium, **no extension loaded**.
+  Three sites (ChatGPT / Gemini / Claude AI) must each reach a real web origin
+  in their own tab. This is the baseline that proves blocks observed in the
+  *with-extension* class are caused by the extension and not by the network /
+  test environment.
+
+* :class:`TestWithExtension` — Chromium with the Prompt Security extension
+  loaded **and the popup pre-configured** (API domain + key). The policy in
+  effect for the configured tenant is *allow chatgpt.com, block everything
+  else*, so the same three sites give:
+
+  * ChatGPT — loads normally (no overlay).
+  * Gemini — blocked: lands on
+    ``chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&...``
+    with the *Access Denied* DOM and a *Powered by: prompt.security* footer.
+  * Claude AI — blocked: same overlay, ``domain=claude.ai``.
+
+Each test opens its own tab via ``self.context.new_page()`` so the visible
+browser window literally contains *tab1 / tab2 / tab3* as required by the
+assignment.
+"""
 
 from __future__ import annotations
 
+import json
+
 import allure
 import pytest
-from playwright.async_api import expect
 
-from tests.pages.chatgpt_page import ChatGPTPage
-from tests.pages.gemini_page import GeminiPage
+from config.settings import settings
+from tests.pages.web_app_page import CHATGPT, CLAUDE, GEMINI, GenAiAppSite, WebGenAiAppPage
 from utils.logger import logger
 from utils.soft_assert import SoftAssert
 
 
+def _attach_snapshot(snap: dict, *, name: str) -> None:
+    allure.attach(
+        json.dumps(snap, indent=2, default=str),
+        name=name,
+        attachment_type=allure.attachment_type.JSON,
+    )
+
+
+async def _open_tab(context, *, tab_index: int):
+    """Create a new tab in the shared persistent context and apply project-wide timeouts."""
+    with allure.step(f"[tab {tab_index}] Open a new browser tab in the shared context"):
+        page = await context.new_page()
+        page.set_default_timeout(settings.test.default_timeout_ms)
+        page.set_default_navigation_timeout(60_000)
+    return page
+
+
 @allure.epic("Prompt Security")
-@allure.feature("Access Policy Enforcement")
+@allure.feature("Web GenAI Access Policy Enforcement")
+@allure.story("Baseline (no extension installed)")
 @pytest.mark.ui
 @pytest.mark.smoke
 @pytest.mark.asyncio(loop_scope="class")
-@pytest.mark.usefixtures("browser_context")
-class TestGenAiPolicyEnforcement:
-    """Black-box validation with extension loaded via persistent Chromium context."""
+@pytest.mark.usefixtures("browser_context_plain")
+class TestWithoutExtension:
+    """No extension → no policy: every GenAI host must reach an unfiltered web origin.
+
+    These three tests share a single Chromium ``BrowserContext`` (class-scoped
+    fixture); each test opens its own tab. The pass criterion is intentionally
+    minimal — *the navigation was not intercepted by an extension overlay* —
+    because vendor login walls and regional redirects can change the final
+    host. The actual landing URL is captured in Allure for review.
+    """
 
     def setup_method(self) -> None:
         self.checker = SoftAssert()
@@ -27,69 +77,285 @@ class TestGenAiPolicyEnforcement:
     def teardown_method(self) -> None:
         self.checker.assert_all()
 
-    @allure.title("ChatGPT — allowed site is usable")
+    @allure.title("Without extension — ChatGPT loads in tab 1 (Result: No Block)")
     @allure.description(
-        "With the extension configured, chatgpt.com should load and accept a prompt; "
-        "an assistant reply surface appears (content not asserted — anti-flake)."
+        "**Scenario:** Vanilla Chromium, no extension loaded.\n\n"
+        "**Action:** Open a new tab (tab 1) → navigate to https://chatgpt.com/.\n\n"
+        "**Expected:** The browser reaches a normal web origin "
+        "(scheme `https`, *not* `chrome-extension://…/pageOverlay.html`). "
+        "The exact final host may vary if ChatGPT shows a login wall or regional "
+        "redirect, but the navigation must NOT be intercepted by an extension overlay — "
+        "this proves the host is reachable in the absence of any policy.\n\n"
+        "**Why this matters:** This is the *baseline* — it ensures any block "
+        "observed in the with-extension class is attributable to the extension's "
+        "policy enforcement, not to the network or the test environment."
     )
-    async def test_chatgpt_is_allowed(self) -> None:
-        chat = ChatGPTPage(self.page)
-        with allure.step("Open ChatGPT"):
-            await chat.navigate()
-            await chat.dismiss_popups()
+    async def test_chatgpt_loads_unblocked_in_tab1(self) -> None:
+        await self._open_in_tab_and_expect_unblocked(CHATGPT, tab_index=1)
 
-        with self.checker.step("Host is chatgpt"):
-            host = chat.page.url.lower()
-            self.checker.check_true(
-                "chatgpt.com" in host or "chat.openai.com" in host, f"Unexpected URL: {chat.page.url}"
+    @allure.title("Without extension — Gemini loads in tab 2 (Result: No Block)")
+    @allure.description(
+        "**Scenario:** Vanilla Chromium, no extension loaded.\n\n"
+        "**Action:** Open a new tab (tab 2) → navigate to https://gemini.google.com/.\n\n"
+        "**Expected:** Final URL is a normal web origin (often `accounts.google.com` "
+        "if the user is signed-out — that's still 'site reachable'). "
+        "The navigation must NOT land on `chrome-extension://…/pageOverlay.html`."
+    )
+    async def test_gemini_loads_unblocked_in_tab2(self) -> None:
+        await self._open_in_tab_and_expect_unblocked(GEMINI, tab_index=2)
+
+    @allure.title("Without extension — Claude AI loads in tab 3 (Result: No Block)")
+    @allure.description(
+        "**Scenario:** Vanilla Chromium, no extension loaded.\n\n"
+        "**Action:** Open a new tab (tab 3) → navigate to https://claude.ai/.\n\n"
+        "**Expected:** Final URL is a normal web origin (often Claude's login page). "
+        "The navigation must NOT land on `chrome-extension://…/pageOverlay.html`."
+    )
+    async def test_claude_loads_unblocked_in_tab3(self) -> None:
+        await self._open_in_tab_and_expect_unblocked(CLAUDE, tab_index=3)
+
+    async def _open_in_tab_and_expect_unblocked(self, site: GenAiAppSite, *, tab_index: int) -> None:
+        page = await _open_tab(self.context, tab_index=tab_index)
+        self.page = page
+
+        with allure.step(f"[tab {tab_index}] Navigate to {site.name} ({site.url})"):
+            wp = WebGenAiAppPage(page, site)
+            await wp.navigate()
+
+        with allure.step(f"[tab {tab_index}] Capture post-navigation state"):
+            snap = await wp.assess_state()
+            _attach_snapshot(snap, name=f"{site.name.replace(' ', '_')}_landing.json")
+
+        with self.checker.step(
+            f"[tab {tab_index}] {site.name}: final scheme is web (https/http), NOT 'chrome-extension'"
+        ):
+            self.checker.check_not_equal(
+                a=snap["scheme"],
+                b="chrome-extension",
+                msg=(
+                    f"{site.name} unexpectedly served by an extension at {snap['final_url']!r}; "
+                    "expected a normal web origin since no extension is installed in this fixture"
+                ),
             )
 
-        with self.checker.step("Prompt input visible and enabled"):
-            await expect(chat.prompt_input).to_be_visible(timeout=90_000)
-            self.checker.check_true(await chat.prompt_input.is_enabled(), "Prompt input should be enabled when allowed")
+        with self.checker.step(f"[tab {tab_index}] {site.name}: no block-overlay snapshot recorded"):
+            self.checker.check_not_in(
+                item="overlay",
+                container=snap,
+                msg=f"{site.name} produced an extension overlay snapshot ({snap.get('overlay')!r})",
+            )
 
-        with allure.step("Send minimal prompt"):
-            await chat.send_prompt("Reply with the single word: pong")
+        logger.info(
+            "Site loaded unblocked (no extension)",
+            app=site.name,
+            tab=tab_index,
+            final_url=snap["final_url"],
+        )
 
-        with self.checker.step("Assistant response appears"):
-            got = await chat.is_response_received()
-            self.checker.check_true(got, "Expected an assistant message after prompt on allowed site")
 
-        logger.info("ChatGPT allowed flow completed")
+@allure.epic("Prompt Security")
+@allure.feature("Web GenAI Access Policy Enforcement")
+@allure.story("With Prompt Security extension installed and configured")
+@pytest.mark.ui
+@pytest.mark.smoke
+@pytest.mark.asyncio(loop_scope="class")
+@pytest.mark.usefixtures("browser_context_with_extension")
+class TestWithExtension:
+    """Extension installed + popup configured → policy = allow ChatGPT, block Gemini & Claude AI.
 
-    @allure.title("Gemini — blocked site shows enforcement (extension overlay)")
+    The fixture has already loaded the unpacked extension and saved API
+    domain + key in the popup. These three tests share that single
+    configured browser context and each opens its own tab. The block
+    assertions check the structured query parameters of the extension's
+    overlay URL (``type=blockPage``, ``domain=<expected>``) and the runtime
+    extension id — making the failure messages precise and actionable.
+    """
+
+    def setup_method(self) -> None:
+        self.checker = SoftAssert()
+
+    def teardown_method(self) -> None:
+        self.checker.assert_all()
+
+    @allure.title("With extension — ChatGPT loads in tab 1 (Result: No Block — allow policy)")
     @allure.description(
-        "Asserts the navigation is intercepted by the Prompt Security extension and the user lands on "
-        "`chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&...`. "
-        "DOM markers (`Access Denied` title, `Powered by: prompt.security` footer link) are collected "
-        "best-effort and attached for review."
+        "**Scenario:** Chromium with the Prompt Security extension loaded and configured.\n\n"
+        "**Policy:** ChatGPT is on the *allow* list for the configured tenant.\n\n"
+        "**Action:** Open a new tab (tab 1) → navigate to https://chatgpt.com/.\n\n"
+        "**Expected:** Final URL is a normal web origin under `chatgpt.com` "
+        "(or vendor login wall) — NOT `chrome-extension://…/pageOverlay.html`. "
+        "This proves the extension applies the *allow* rule rather than blocking everything."
     )
-    async def test_gemini_is_blocked(self) -> None:
-        gem = GeminiPage(self.page)
-        with allure.step("Open Gemini"):
-            await gem.navigate()
+    async def test_chatgpt_loads_unblocked_in_tab1(self) -> None:
+        await self._open_in_tab_and_expect_unblocked(CHATGPT, tab_index=1)
 
-        with allure.step("Wait for extension block overlay"):
-            evidence = await gem.assess_block()
+    @allure.title("With extension — Gemini blocked in tab 2 (Result: Block — Access Denied overlay)")
+    @allure.description(
+        "**Scenario:** Chromium with the Prompt Security extension loaded and configured.\n\n"
+        "**Policy:** Gemini is on the *block* list for the configured tenant.\n\n"
+        "**Action:** Open a new tab (tab 2) → navigate to https://gemini.google.com/.\n\n"
+        "**Expected:** The extension intercepts the navigation and the user lands on\n"
+        "`chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&originalUrl=…`.\n\n"
+        "We verify, in order:\n"
+        "1. Final URL scheme is `chrome-extension`.\n"
+        "2. The overlay was served by the **same** extension id resolved by the fixture (`self.chrome_extension_id`).\n"
+        "3. Query parameter `type=blockPage`.\n"
+        "4. Query parameter `domain=gemini.google.com`.\n"
+        "5. DOM markers `Access Denied` (`#title-text`) and the `Powered by: prompt.security` footer link "
+        "are present (best-effort; recorded as Allure detail).\n\n"
+        "Failing on parsed query params (vs. fragile DOM heuristics) makes the error message itself the diagnosis."
+    )
+    async def test_gemini_blocked_in_tab2(self) -> None:
+        await self._open_in_tab_and_expect_blocked(GEMINI, tab_index=2)
 
-        assert evidence is not None, (
-            "Expected the Prompt Security extension to redirect to its block overlay "
-            "(chrome-extension://<id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com), "
-            f"but the active URL was: {gem.page.url}"
+    @allure.title("With extension — Claude AI blocked in tab 3 (Result: Block — Access Denied overlay)")
+    @allure.description(
+        "**Scenario:** Chromium with the Prompt Security extension loaded and configured.\n\n"
+        "**Policy:** Claude AI is on the *block* list for the configured tenant.\n\n"
+        "**Action:** Open a new tab (tab 3) → navigate to https://claude.ai/.\n\n"
+        "**Expected:** The extension intercepts the navigation and the user lands on\n"
+        "`chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=claude.ai&originalUrl=…`.\n\n"
+        "Same checks as the Gemini case (URL scheme + extension id + query params + DOM markers), "
+        "with `domain=claude.ai`."
+    )
+    async def test_claude_blocked_in_tab3(self) -> None:
+        await self._open_in_tab_and_expect_blocked(CLAUDE, tab_index=3)
+
+    async def _open_in_tab_and_expect_unblocked(self, site: GenAiAppSite, *, tab_index: int) -> None:
+        page = await _open_tab(self.context, tab_index=tab_index)
+        self.page = page
+
+        with allure.step(f"[tab {tab_index}] Navigate to {site.name} ({site.url}) — expecting allow policy"):
+            wp = WebGenAiAppPage(page, site)
+            await wp.navigate()
+
+        with allure.step(f"[tab {tab_index}] Capture post-navigation state"):
+            snap = await wp.assess_state()
+            _attach_snapshot(snap, name=f"{site.name.replace(' ', '_')}_landing.json")
+
+        with self.checker.step(
+            f"[tab {tab_index}] {site.name}: ALLOW policy → final URL is a real web origin, not the extension overlay"
+        ):
+            self.checker.check_not_equal(
+                a=snap["scheme"],
+                b="chrome-extension",
+                msg=(
+                    f"{site.name} should be allowed by policy but the extension overlay was shown at "
+                    f"{snap['final_url']!r}; expected a normal web origin"
+                ),
+            )
+
+        with self.checker.step(f"[tab {tab_index}] {site.name}: no block-overlay snapshot recorded"):
+            self.checker.check_not_in(
+                item="overlay",
+                container=snap,
+                msg=f"{site.name} unexpectedly produced an extension overlay snapshot ({snap.get('overlay')!r})",
+            )
+
+        logger.info(
+            "Allowed site loaded with extension installed",
+            app=site.name,
+            tab=tab_index,
+            final_url=snap["final_url"],
         )
-        assert evidence.reason == "extension_overlay_block", (
-            f"Block evidence is not extension-attributable: reason={evidence.reason!r} detail={evidence.detail!r}"
-        )
+
+    async def _open_in_tab_and_expect_blocked(self, site: GenAiAppSite, *, tab_index: int) -> None:
+        page = await _open_tab(self.context, tab_index=tab_index)
+        self.page = page
+
+        with allure.step(f"[tab {tab_index}] Navigate to {site.name} ({site.url}) — expecting BLOCK policy"):
+            wp = WebGenAiAppPage(page, site)
+            await wp.navigate()
+
+        with allure.step(f"[tab {tab_index}] Wait for the extension's pageOverlay.html to settle"):
+            snap = await wp.assess_state(settle_seconds=2.0)
+            _attach_snapshot(snap, name=f"{site.name.replace(' ', '_')}_landing.json")
+
+        with self.checker.step(f"[tab {tab_index}] Final URL scheme is 'chrome-extension'"):
+            self.checker.check_equal(
+                actual=snap["scheme"],
+                expected="chrome-extension",
+                message=(
+                    f"{site.name} block expected: final URL should be served by the extension, "
+                    f"got {snap['final_url']!r}"
+                ),
+            )
+
+        with self.checker.step(
+            f"[tab {tab_index}] Final URL is the extension's pageOverlay.html (block snapshot recorded)"
+        ):
+            self.checker.check_in(
+                item="overlay",
+                container=snap,
+                msg=(
+                    f"{site.name} did not land on a recognised pageOverlay.html (final URL was {snap['final_url']!r})"
+                ),
+            )
+
+        overlay = snap.get("overlay")
+        if overlay is None:
+            return
+
+        with self.checker.step(f"[tab {tab_index}] Overlay query: type=blockPage"):
+            self.checker.check_equal(
+                actual=overlay.get("type"),
+                expected="blockPage",
+                message=f"{site.name} overlay declares unexpected type {overlay.get('type')!r}",
+            )
+
+        with self.checker.step(f"[tab {tab_index}] Overlay query: domain={site.block_domain}"):
+            self.checker.check_equal(
+                actual=overlay.get("domain"),
+                expected=site.block_domain,
+                message=(
+                    f"{site.name} overlay declares wrong blocked domain "
+                    f"(expected {site.block_domain!r}, got {overlay.get('domain')!r})"
+                ),
+            )
 
         ext_id = getattr(self, "chrome_extension_id", None)
         if ext_id:
-            assert f"extension_id={ext_id}" in evidence.detail, (
-                f"Overlay served by an unexpected extension id; expected {ext_id}, got detail={evidence.detail!r}"
+            with self.checker.step(f"[tab {tab_index}] Overlay served by the loaded extension id ({ext_id})"):
+                self.checker.check_equal(
+                    actual=overlay.get("extension_id"),
+                    expected=ext_id,
+                    message=(
+                        f"{site.name} overlay served by an unexpected extension id "
+                        f"(expected {ext_id!r}, got {overlay.get('extension_id')!r})"
+                    ),
+                )
+
+        with self.checker.step(
+            f"[tab {tab_index}] Overlay carries 'Access Denied' title and 'Powered by: prompt.security' branding"
+        ):
+            title = (overlay.get("title_text") or overlay.get("message_title") or "").strip()
+            self.checker.check_true(
+                bool(title),
+                msg=f"{site.name} overlay missing #title-text / #message-title in DOM",
+            )
+            if title:
+                self.checker.check_in(
+                    item="Denied",
+                    container=title,
+                    msg=f"{site.name} overlay title is not 'Access Denied' (got {title!r})",
+                )
+            powered_by = overlay.get("powered_by") or ""
+            self.checker.check_in(
+                item="prompt.security",
+                container=powered_by,
+                msg=f"{site.name} overlay missing 'Powered by: prompt.security' link (got {powered_by!r})",
             )
 
         allure.attach(
-            body=f"{evidence.reason}: {evidence.detail}",
-            name="block_evidence",
+            body=" | ".join(f"{k}={v}" for k, v in overlay.items()),
+            name=f"{site.name.replace(' ', '_')}_block_evidence",
             attachment_type=allure.attachment_type.TEXT,
         )
-        logger.info("Gemini block asserted", reason=evidence.reason, detail=evidence.detail)
+        logger.info(
+            "Site blocked by extension policy",
+            app=site.name,
+            tab=tab_index,
+            extension_id=overlay.get("extension_id"),
+            domain=overlay.get("domain"),
+            type=overlay.get("type"),
+        )

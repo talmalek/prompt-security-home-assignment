@@ -60,7 +60,7 @@ class ExtensionConfig(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
     # Optional at import time so CI/scripts (e.g. push_to_notion) can run without it;
-    # UI tests require it — see `browser_context` in tests/conftest.py.
+    # UI tests with the extension require it — see `browser_context_with_extension` in tests/conftest.py.
     api_key: SecretStr | None = Field(default=None, validation_alias="PROMPT_SECURITY_API_KEY")
     api_domain: str = Field(default="eu.prompt.security", validation_alias="PROMPT_SECURITY_API_DOMAIN")
     chrome_store_extension_id: str = Field(

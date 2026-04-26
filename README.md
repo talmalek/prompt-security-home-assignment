@@ -1,9 +1,13 @@
 # Prompt Security — GenAI access policy automation
 
-Automation that validates the **Prompt Security Browser Extension** enforces administrator policy for web GenAI apps:
+Automation that validates the **Prompt Security Browser Extension** enforces administrator policy for web GenAI apps. The suite runs **6 black-box scenarios** in two pytest classes — each backed by its own Playwright fixture — covering the full *baseline vs. policy-enforced* matrix:
 
-- **Allow** `https://chatgpt.com/` — page loads, prompt input works, assistant reply appears.
-- **Block** `https://gemini.google.com/` — adaptive detection (block UI, extension copy, disabled input, or no response after prompt).
+| Class (fixture) | Tab 1 — ChatGPT | Tab 2 — Gemini | Tab 3 — Claude AI |
+|---|---|---|---|
+| `TestWithoutExtension` (`browser_context_plain`) | No block — site reachable | No block — site reachable | No block — site reachable |
+| `TestWithExtension` (`browser_context_with_extension`) | No block — *allow* policy | **BLOCK** — Access Denied overlay | **BLOCK** — Access Denied overlay |
+
+Each block assertion checks the structured query parameters of the extension's overlay URL (`type=blockPage`, `domain=<expected>`) and the runtime `chrome-extension://<id>` resolved by the fixture from the MV3 service worker URL.
 
 Stack: Python 3.12, **pytest**, **pytest-asyncio**, async **Playwright**, **Allure**, **POM**, **uv**, **ruff**. Optional **Notion** “Test Runs” reporter (same fail-open design as the parent boilerplate).
 
@@ -13,14 +17,13 @@ Stack: Python 3.12, **pytest**, **pytest-asyncio**, async **Playwright**, **Allu
 flowchart LR
     Fetch["scripts/fetch_extension.py"] --> ExtDir["extension/ gitignored"]
     ExtDir --> Conftest["tests/conftest.py"]
-    Conftest --> Ctx["launch_persistent_context + load-extension"]
-    Ctx --> Popup["Extension popup API Domain + Key"]
-    Popup --> Tests["tests/ui/test_policy_enforcement.py"]
-    Tests --> ChatGPT["ChatGPT allowed"]
-    Tests --> Gemini["Gemini blocked"]
+    Conftest --> Plain["browser_context_plain<br/>(no extension)"]
+    Conftest --> WithExt["browser_context_with_extension<br/>(--load-extension + popup config)"]
+    Plain --> Baseline["TestWithoutExtension<br/>3 tabs · 3 sites · all reachable"]
+    WithExt --> Enforced["TestWithExtension<br/>chatgpt allow · gemini/claude block"]
 ```
 
-The unpacked Chrome extension id at runtime **differs** from the Chrome Web Store id; tests resolve the `chrome-extension` id from the extension **service worker** URL.
+Both fixtures share a single private lifecycle helper (`_persistent_context_lifecycle`) so the only behavioural delta is the `--load-extension` flags + popup configuration.
 
 ## Prerequisites
 
@@ -90,14 +93,17 @@ To wire a fresh page yourself:
 ## Test design notes
 
 - **Black-box**: assertions are on user-visible outcomes, not extension internals.
-- **Adaptive Gemini blocking**: `BlockEvidence` records which heuristic fired (URL, “Access Denied” modal, banner text, disabled/missing input, or no model response after prompt).
-- **Trade-offs**: headed + Xvfb in CI is slower but reliable for MV3 extensions; locators may need updates if OpenAI/Google change their UIs.
+- **Two fixtures, one lifecycle helper** — `browser_context_plain` and `browser_context_with_extension` both delegate to `_persistent_context_lifecycle()` in `tests/conftest.py`. The with-extension variant additionally loads the unpacked extension and saves API domain + key in the popup before yielding.
+- **One generic page object** (`tests/pages/web_app_page.py::WebGenAiAppPage`) with three site descriptors (`CHATGPT`, `GEMINI`, `CLAUDE`). The post-navigation snapshot returns either a "real web origin" record or an `overlay` sub-dict capturing the extension's block-overlay metadata (`extension_id`, `type`, `domain`, `originalUrl`, `title_text`, `powered_by`).
+- **Block evidence is structural**, not heuristic: assertions key off the parsed `chrome-extension://<id>/html/pageOverlay.html?type=blockPage&domain=…` query string. Failure messages double as diagnostic output (e.g. *"overlay declares wrong blocked domain — expected 'claude.ai', got 'gemini.google.com'"*).
+- **Soft assertions** via `utils/soft_assert.py::SoftAssert` per project convention — every check is its own Allure step and all collected failures are reported together at teardown.
+- **Trade-offs**: headed + Xvfb in CI is slower but reliable for MV3 extensions; locators may need updates if vendors change their UIs.
 
 ## Risks and assumptions
 
-- Policy is **backend-driven** via your API key; tests assume the assigned policy allows ChatGPT and blocks Gemini.
-- ChatGPT may show login or regional gates; the smoke test expects a **guest or already-authenticated** path where the main prompt is reachable.
-- Gemini and ChatGPT UIs change; POMs use resilient fallbacks but are not maintenance-free.
+- Policy is **backend-driven** via your API key; tests assume the assigned policy *allows* ChatGPT and *blocks* Gemini and Claude AI.
+- "Site loads" in the without-extension class is intentionally lenient — login walls / regional redirects are accepted as long as the navigation isn't intercepted by an extension overlay. The actual landing URL is captured in Allure for review.
+- Vendor UIs change; the generic page object only relies on URL structure (which is stable) and a couple of optional DOM markers from the extension's own block overlay — minimising flaky failure modes.
 
 ## Intentionally out of scope
 
