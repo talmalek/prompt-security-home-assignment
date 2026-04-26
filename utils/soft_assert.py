@@ -30,6 +30,10 @@ class SoftAssert:
 
             if len(self.errors) > errors_before:
                 step_errors = self.errors[errors_before:]
+                # Clear the errors we are about to raise so that a subsequent
+                # call to assert_all() in teardown_method does not double-report
+                # the same failures as a teardown ERROR.
+                self.errors = self.errors[:errors_before]
                 raise AssertionError("; ".join(step_errors))
 
     def check(self, condition: bool, msg: str) -> None:

@@ -29,6 +29,7 @@ from types import SimpleNamespace
 
 import pytest
 from playwright.async_api import BrowserContext, async_playwright
+from pydantic import SecretStr
 
 from config.settings import settings
 from tests.pages.extension_popup_page import ExtensionPopupPage
@@ -85,7 +86,10 @@ async def _detect_chrome_extension_id_from_context(context: BrowserContext, time
 
 @asynccontextmanager
 async def _persistent_context_lifecycle(
-    *, cls_name: str, with_extension: bool
+    *,
+    cls_name: str,
+    with_extension: bool,
+    api_key_override: SecretStr | None = None,
 ) -> AsyncIterator[tuple[BrowserContext, str | None]]:
     """Single source of truth for launching a class-scoped persistent Chromium context.
 
@@ -96,6 +100,14 @@ async def _persistent_context_lifecycle(
     the with-extension case) the one-time popup configuration. Both fixtures
     delegate the entire lifecycle here so the only behavioural delta between
     "plain" and "with-extension" lives in this one place.
+
+    Args:
+        cls_name:        Unique name used for ``user-data`` dir and trace file path.
+        with_extension:  Whether to load the unpacked extension and configure the popup.
+        api_key_override: When provided, the popup is configured with *this* key
+                          instead of ``settings.extension.api_key``.  Use it to test
+                          different policy tenants without forking the fixture.  The
+                          override value is intentionally not logged (it's a SecretStr).
     """
     _ensure_report_dirs()
 
@@ -105,11 +117,15 @@ async def _persistent_context_lifecycle(
 
     launch_args: list[str] = []
     abs_ext: str | None = None
+    # Resolved once here so both the pre-launch guard and the post-launch popup
+    # configuration use the same value.
+    api_key: SecretStr | None = None
 
     if with_extension:
         from scripts.fetch_extension import fetch_and_unpack
 
-        if settings.extension.api_key is None:
+        api_key = api_key_override if api_key_override is not None else settings.extension.api_key
+        if api_key is None:
             pytest.fail(
                 "PROMPT_SECURITY_API_KEY is required for with-extension tests. "
                 "Set it in `.env` (see `.env.example`) or as the GitHub secret `PROMPT_SECURITY_API_KEY`."
@@ -148,8 +164,8 @@ async def _persistent_context_lifecycle(
             config_page.set_default_timeout(settings.test.default_timeout_ms)
             config_page.set_default_navigation_timeout(120_000)
             popup = ExtensionPopupPage(config_page)
-            assert settings.extension.api_key is not None  # narrowed above  # noqa: S101
-            await popup.configure(ext_id, settings.extension.api_domain, settings.extension.api_key)
+            assert api_key is not None  # narrowed above  # noqa: S101
+            await popup.configure(ext_id, settings.extension.api_domain, api_key)
             saved_domain = await popup.read_api_domain()
             if saved_domain.strip() != settings.extension.api_domain.strip():
                 logger.warning(
