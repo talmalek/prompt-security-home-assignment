@@ -53,16 +53,24 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
-      # Full suite including demo/intentional failures. continue-on-error keeps the job green for Pages/Notion deploy.
-      - name: Pytest
-        id: pytest
-        continue-on-error: true
-        run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' uv run pytest -v
+      # Production tests MUST pass — a real regression turns the workflow red.
+      # Demo/intentional-failure tests run separately (next step) with
+      # ``continue-on-error`` so they never gate the overall build, but their
+      # outcome is still surfaced in the run log and Allure report.
+      - name: Pytest (production)
+        id: pytest_prod
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' uv run pytest -v -m "not demo"
 
-      - name: Warn if any test failed
-        if: always() && steps.pytest.outcome == 'failure'
+      - name: Pytest (demo / intentional failures)
+        id: pytest_demo
+        if: always()
+        continue-on-error: true
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' uv run pytest -v -m "demo"
+
+      - name: Warn if demo step had failures
+        if: always() && steps.pytest_demo.outcome == 'failure'
         run: |
-          echo "::warning::Pytest reported one or more failures — check the Pytest step log. This does not fail CI or block Allure Pages deployment."
+          echo "::warning::Demo failure tests reported failures (this is expected — they exercise the failure-reporting pipeline). Check the Allure report."
 
       - name: Upload allure results
         if: always()

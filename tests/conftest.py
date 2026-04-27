@@ -61,24 +61,59 @@ def _ensure_report_dirs() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
-def _run_async_on_playwright_loop(loop_owner: object | None, coro):
-    """Run Playwright async calls on the loop that owns ``page`` (not asyncio.run()'s new loop).
+# === Session-cached real Chromium User-Agent =============================
+# The hardcoded UA string we used previously drifted from the bundled
+# Chromium's actual version every time Playwright bumped its browser, which
+# *increased* Cloudflare bot-score (UA / fingerprint mismatch is one of the
+# signals Cloudflare cross-checks). Resolving the UA dynamically from the
+# bundled binary keeps the UA string consistent with the JS surface
+# (``navigator.userAgentData.brands``, etc.) — which should *help*
+# Cloudflare bypass, not hurt it.
+#
+# Fallback constant: the previously-pinned literal. If the dynamic probe
+# fails (unlikely — Playwright would also be unable to launch tests) we use
+# this as a last resort. Also handy as a quick revert if a Cloudflare
+# regression is observed against the dynamic value: copy this string into the
+# resolver below.
+_FALLBACK_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+)
+_resolved_ua_cache: str | None = None
 
-    ``loop_owner`` is the test instance (function-scoped fixture stores the loop
-    on ``self``); falls back to ``asyncio.run`` if the loop isn't reachable or
-    is already running.
+
+async def _resolve_real_chrome_user_agent() -> str:
+    """Resolve the bundled Chromium's actual UA string. Cached for the session.
+
+    Strips ``HeadlessChrome`` from the result because Cloudflare specifically
+    flags that token; the rest of the JS surface (the stealth init script
+    below) is consistent with regular Chrome.
     """
-    loop = getattr(loop_owner, "_playwright_loop", None) if loop_owner is not None else None
-    if loop is None:
-        return asyncio.run(coro)
+    global _resolved_ua_cache
+    if _resolved_ua_cache is not None:
+        return _resolved_ua_cache
     try:
-        if loop.is_running():
-            logger.warning("Playwright event loop is still running in makereport; failure screenshot may be unreliable")
-            return asyncio.run(coro)
-        return loop.run_until_complete(coro)
-    except RuntimeError as e:
-        logger.warning("Falling back to asyncio.run for failure artifacts", error=str(e))
-        return asyncio.run(coro)
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                ctx = await browser.new_context()
+                page = await ctx.new_page()
+                ua = await page.evaluate("navigator.userAgent")
+                ua = (ua or "").replace("HeadlessChrome", "Chrome").strip()
+                if not ua:
+                    raise RuntimeError("Empty navigator.userAgent")
+            finally:
+                await browser.close()
+        logger.info("Resolved bundled Chromium UA dynamically", user_agent=ua)
+    except Exception as exc:
+        logger.warning(
+            "Could not resolve bundled Chromium UA dynamically; using pinned fallback",
+            error=str(exc).splitlines()[0][:200],
+            fallback_user_agent=_FALLBACK_UA,
+        )
+        ua = _FALLBACK_UA
+    _resolved_ua_cache = ua
+    return ua
 
 
 async def _detect_chrome_extension_id_from_context(context: BrowserContext, timeout_s: float = 90.0) -> str:
@@ -204,15 +239,13 @@ async def _persistent_context_lifecycle(
     #         ``deviceMemory``, the ``chrome.runtime`` stub, and the
     #         Permissions API.
     #
-    # When Playwright bumps its bundled Chromium major version, update the UA
-    # below to match (the bundled version is printed by ``playwright install
-    # chromium`` and visible in ``--version`` of the downloaded binary).
+    # The UA string is resolved dynamically from the bundled Chromium's actual
+    # ``navigator.userAgent`` (cached for the session) so the UA never drifts
+    # away from the JS surface Cloudflare also fingerprints. See
+    # :func:`_resolve_real_chrome_user_agent` for the rationale.
     if "--disable-blink-features=AutomationControlled" not in launch_args:
         launch_args.append("--disable-blink-features=AutomationControlled")
-    real_chrome_user_agent = (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
-    )
+    real_chrome_user_agent = await _resolve_real_chrome_user_agent()
     stealth_init_script = """
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         Object.defineProperty(navigator, 'plugins', {
@@ -259,14 +292,13 @@ async def _persistent_context_lifecycle(
             config_page.set_default_navigation_timeout(120_000)
             popup = ExtensionPopupPage(config_page)
             assert api_key is not None  # narrowed above  # noqa: S101
-            await popup.configure(ext_id, settings.extension.api_domain, api_key)
-            saved_domain = await popup.read_api_domain()
-            if saved_domain.strip() != settings.extension.api_domain.strip():
-                logger.warning(
-                    "API domain in popup differs from expected after save",
-                    expected=settings.extension.api_domain,
-                    got=saved_domain,
-                )
+            # ``configure`` now reads back the API domain and raises if Save failed
+            # to persist it; we translate that into ``pytest.fail`` so the test
+            # report shows the real cause instead of an opaque teardown error.
+            try:
+                await popup.configure(ext_id, settings.extension.api_domain, api_key)
+            except RuntimeError as exc:
+                pytest.fail(str(exc), pytrace=False)
             await config_page.close()
 
             # === Policy-activation barrier ==================================
@@ -420,16 +452,40 @@ def _ensure_latest_extension() -> None:
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> None:
+    """Stash the per-phase report on the item; failure artifacts are produced
+    by :func:`_capture_failure_artifacts`, called from each browser-context
+    fixture's ``finally`` clause **before** the context tears down. That gives
+    us a still-alive ``Page`` to ``await page.screenshot(...)`` against on the
+    test's own asyncio loop — same loop that created the page, so it works
+    identically locally, on GitHub Actions, and on Kubernetes runners
+    (we never touch ``playwright.sync_api``).
+    """
     outcome = yield
     rep = outcome.get_result()
     setattr(item, "rep_" + rep.when, rep)
-    if call.when != "call" or not rep.failed:
+
+
+async def _capture_failure_artifacts(request: pytest.FixtureRequest) -> None:
+    """Capture failure screenshot + page source while the page is still alive.
+
+    Why this isn't a separate ``autouse`` fixture: pytest tears down autouse
+    fixtures *after* the requested ``browser_context_*`` fixture, so by the
+    time an autouse fixture's after-yield ran, the persistent Chromium
+    context (and all its pages) had already been closed and screenshotting
+    would fail. Running this from inside the ``finally`` clause of the
+    browser-context fixture itself (i.e. *between* the test body and the
+    ``async with _persistent_context_lifecycle`` exit that closes the
+    context) is the only ordering that keeps the page reachable on the
+    correct asyncio loop.
+    """
+    rep = getattr(request.node, "rep_call", None)
+    if rep is None or not rep.failed:
         return
-    page = _resolve_failure_page(item)
+    page = _resolve_failure_page(request.node)
     if page is None:
         return
 
-    async def _failure_artifacts() -> bytes | None:
+    try:
         png = await asyncio.wait_for(
             page.screenshot(full_page=False, timeout=5000),
             timeout=8,
@@ -440,27 +496,20 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) ->
             attach_page_source(page_html, name="page_source")
         except Exception as e:
             attach_text(str(e), name="page_source_error")
-        return png
-
-    try:
-        png = _run_async_on_playwright_loop(getattr(item, "instance", None), _failure_artifacts())
-        if png:
-            extras = getattr(rep, "extras", None)
-            if not extras:
-                rep.extras = []
-                extras = rep.extras
-            extras.append(
-                SimpleNamespace(
-                    name="Failure screenshot",
-                    format="png",
-                    format_type="image",
-                    extension="png",
-                    content=png,
-                )
+        path = SCREENSHOTS_DIR / f"{request.node.nodeid.replace('::', '_').replace('/', '_')}.png"
+        path.write_bytes(png)
+        extras = list(getattr(rep, "extras", None) or [])
+        extras.append(
+            SimpleNamespace(
+                name="Failure screenshot",
+                format="png",
+                format_type="image",
+                extension="png",
+                content=png,
             )
-            path = SCREENSHOTS_DIR / f"{item.nodeid.replace('::', '_').replace('/', '_')}.png"
-            path.write_bytes(png)
-            logger.info("Saved failure screenshot", path=str(path))
+        )
+        rep.extras = extras
+        logger.info("Saved failure screenshot", path=str(path))
     except Exception:
         logger.warning("Could not capture failure screenshot / Allure attachments", exc_info=True)
 
@@ -490,10 +539,12 @@ async def browser_context_plain(request: pytest.FixtureRequest) -> AsyncIterator
     """
     instance_id = _instance_id_for(request)
     async with _persistent_context_lifecycle(instance_id=instance_id, with_extension=False) as (ctx, _):
-        request.instance._playwright_loop = asyncio.get_running_loop()
         request.instance.context = ctx
         request.instance.chrome_extension_id = None
-        yield
+        try:
+            yield
+        finally:
+            await _capture_failure_artifacts(request)
 
 
 @pytest.fixture
@@ -513,10 +564,12 @@ async def browser_context_with_extension(request: pytest.FixtureRequest) -> Asyn
     """
     instance_id = _instance_id_for(request)
     async with _persistent_context_lifecycle(instance_id=instance_id, with_extension=True) as (ctx, ext_id):
-        request.instance._playwright_loop = asyncio.get_running_loop()
         request.instance.context = ctx
         request.instance.chrome_extension_id = ext_id
-        yield
+        try:
+            yield
+        finally:
+            await _capture_failure_artifacts(request)
 
 
 @pytest.fixture

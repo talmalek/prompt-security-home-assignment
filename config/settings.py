@@ -68,6 +68,22 @@ class ExtensionConfig(BaseSettings):
         validation_alias="CHROME_STORE_EXTENSION_ID",
     )
     extension_path: Path = Field(default=Path("extension"), validation_alias="EXTENSION_PATH")
+    # CRX download endpoint (undocumented Chrome update endpoint). Externalised
+    # so a future endpoint rotation or ``prodversion`` bump is a config change,
+    # not a source patch. ``{id}`` and ``{prodversion}`` are interpolated by
+    # ``scripts/fetch_extension.py``.
+    crx_url_template: str = Field(
+        default=(
+            "https://clients2.google.com/service/update2/crx"
+            "?response=redirect&os=linux&arch=x86-64&prod=chromiumcrx&prodchannel=unknown"
+            "&prodversion={prodversion}&acceptformat=crx2,crx3&x=id%3D{id}%26uc"
+        ),
+        validation_alias="CHROME_STORE_CRX_URL_TEMPLATE",
+    )
+    crx_prodversion: str = Field(
+        default="120.0.0.0",
+        validation_alias="CHROME_STORE_CRX_PRODVERSION",
+    )
 
     @field_validator("extension_path", mode="before")
     @classmethod

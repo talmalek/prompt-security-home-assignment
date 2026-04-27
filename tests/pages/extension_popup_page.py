@@ -50,10 +50,29 @@ class ExtensionPopupPage(BasePage):
         await self.save_button.click()
 
     async def configure(self, chrome_extension_id: str, domain: str, api_key: SecretStr) -> None:
+        """Open the popup, fill credentials, click Save, and verify the domain persisted.
+
+        Verifying the round-trip here (rather than only in the calling fixture) means
+        every caller — production, demo, future tenants — gets the same fail-fast
+        behaviour when the popup form selectors drift in a new extension release. A
+        silent ``Save`` no-op would otherwise surface 30+ seconds later as an opaque
+        "expected block, got allow" failure with no clue that the popup itself was
+        the root cause.
+        """
         await self.open(chrome_extension_id)
         await self.set_api_domain(domain)
         await self.set_api_key(api_key)
         await self.save()
+        saved_domain = await self.read_api_domain()
+        if saved_domain.strip() != domain.strip():
+            msg = (
+                "Extension popup did not persist API domain after Save "
+                f"(expected={domain!r}, got={saved_domain!r}). "
+                "The popup form selectors in tests/pages/extension_popup_page.py "
+                "likely changed in a new extension release."
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
 
     async def read_api_domain(self) -> str:
         await expect(self.api_domain_input).to_be_visible(timeout=10_000)
