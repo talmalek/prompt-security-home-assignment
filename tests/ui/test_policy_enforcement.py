@@ -440,9 +440,7 @@ class TestWithExtension:
                     ),
                 )
 
-        with self.checker.step(
-            f"[tab {tab}] Overlay body has block-page class marker (body.ai-site)"
-        ):
+        with self.checker.step(f"[tab {tab}] Overlay body has block-page class marker (body.ai-site)"):
             logger.info(f"[tab {tab}] Verifying overlay body class marker")
             body_class = overlay.get("body_class") or ""
             self.checker.check_in(
@@ -451,9 +449,7 @@ class TestWithExtension:
                 msg=f"{site.name} overlay body missing 'ai-site' class (got body.class={body_class!r})",
             )
 
-        with self.checker.step(
-            f"[tab {tab}] Overlay shows 'Access Denied' title (.title)"
-        ):
+        with self.checker.step(f"[tab {tab}] Overlay shows 'Access Denied' title (.title)"):
             logger.info(f"[tab {tab}] Verifying overlay title text")
             title = (overlay.get("title_text") or "").strip()
             self.checker.check_true(
@@ -480,31 +476,23 @@ class TestWithExtension:
                 self.checker.check_in(
                     item="blocked",
                     container=description.lower(),
-                    msg=(
-                        f"{site.name} overlay description does not mention administrator block "
-                        f"(got {description!r})"
-                    ),
+                    msg=(f"{site.name} overlay description does not mention administrator block (got {description!r})"),
                 )
 
-        with self.checker.step(
-            f"[tab {tab}] Overlay carries Prompt Security / SentinelOne branding (#poweredBy)"
-        ):
+        with self.checker.step(f"[tab {tab}] Overlay carries Prompt Security / SentinelOne branding (#poweredBy)"):
             logger.info(f"[tab {tab}] Verifying overlay branding container")
             self.checker.check_true(
                 bool(overlay.get("has_branding")),
                 msg=f"{site.name} overlay missing Prompt Security branding container (#poweredBy / .powered-by)",
             )
 
-        with self.checker.step(
-            f"[tab {tab}] Overlay query: canBypass=Prevent (no per-user override on this policy)"
-        ):
+        with self.checker.step(f"[tab {tab}] Overlay query: canBypass=Prevent (no per-user override on this policy)"):
             logger.info(f"[tab {tab}] Verifying overlay canBypass query")
             self.checker.check_equal(
                 actual=overlay.get("can_bypass"),
                 expected="Prevent",
                 message=(
-                    f"{site.name} overlay declares unexpected canBypass value "
-                    f"(got {overlay.get('can_bypass')!r})"
+                    f"{site.name} overlay declares unexpected canBypass value (got {overlay.get('can_bypass')!r})"
                 ),
             )
 
