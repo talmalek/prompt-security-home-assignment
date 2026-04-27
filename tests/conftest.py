@@ -146,6 +146,42 @@ async def _persistent_context_lifecycle(
         if a not in launch_args:
             launch_args.append(a)
 
+    # === EXPERIMENTAL: Cloudflare bot-detection bypass attempt for ChatGPT ===
+    # If this does not get past Cloudflare's "Verify you are human" challenge
+    # under Playwright automation, revert this entire block.  Patches applied:
+    #   1. --disable-blink-features=AutomationControlled  (removes WebDriver flag)
+    #   2. user_agent override                             (real Chrome 130 macOS)
+    #   3. add_init_script                                 (hide navigator.webdriver,
+    #                                                      mock plugins/languages,
+    #                                                      add chrome.runtime stub,
+    #                                                      patch Permissions API)
+    if "--disable-blink-features=AutomationControlled" not in launch_args:
+        launch_args.append("--disable-blink-features=AutomationControlled")
+    real_chrome_user_agent = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    )
+    stealth_init_script = """
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [
+                { name: 'PDF Viewer', filename: 'internal-pdf-viewer' },
+                { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer' },
+                { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer' },
+            ],
+        });
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        if (!window.chrome) { window.chrome = {}; }
+        if (!window.chrome.runtime) { window.chrome.runtime = {}; }
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (params) => (
+            params.name === 'notifications' ?
+                Promise.resolve({ state: Notification.permission }) :
+                originalQuery(params)
+        );
+    """
+    # === END EXPERIMENTAL block ===
+
     async with async_playwright() as pw:
         context = await pw.chromium.launch_persistent_context(
             user_data_dir=str(udd),
@@ -154,7 +190,9 @@ async def _persistent_context_lifecycle(
             args=launch_args,
             viewport={"width": 1920, "height": 900},
             ignore_https_errors=True,
+            user_agent=real_chrome_user_agent,
         )
+        await context.add_init_script(stealth_init_script)
         await context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
         ext_id: str | None = None
