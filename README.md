@@ -346,12 +346,6 @@ To wire a fresh Notion page:
 - Headed + Xvfb in CI is slower (~30 s) but the only reliable mode for MV3 extensions that
   intercept navigation events.
 
-## Intentionally out of scope
-
-- PII / DLP logic inside the extension
-- Network interception or MITM-style tooling
-- Multi-tenant admin-UI testing
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
