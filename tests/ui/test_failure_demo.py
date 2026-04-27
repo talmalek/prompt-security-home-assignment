@@ -70,25 +70,41 @@ Nothing else changes — the production test classes are completely unaffected.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 
 import allure
 import pytest
 from pydantic import SecretStr
 
-from tests.conftest import _instance_id_for, _persistent_context_lifecycle
+from tests.conftest import _capture_failure_artifacts, _instance_id_for, _persistent_context_lifecycle
 from tests.pages.web_app_page import CLAUDE, GEMINI
 from tests.ui.test_policy_enforcement import run_block_assertion
 from utils.logger import logger
 from utils.soft_assert import SoftAssert
 
-# Intentional hard-code: a real Prompt Security API key that has *no block rules*
-# configured on its tenant.  The extension authenticates successfully but receives
-# an empty policy, so it defaults to "allow all" — Gemini and Claude AI load
-# normally, which is exactly what makes the block assertions fail.
-# This key is intentionally committed for demo/interview purposes (open repo).
-# It has no sensitive policy data associated with it.
+# ---------------------------------------------------------------------------
+# DEMO ONLY — Home Assignment scope
+#
+# This open-policy API key is intentionally hardcoded for the home assignment
+# demo of the failure-reporting pipeline. The key authenticates successfully
+# but has *no block rules* configured on its tenant, so the extension defaults
+# to "allow all" — Gemini and Claude AI load normally, which makes the block
+# assertions fail and exercises the full failure-reporting pipeline (Allure
+# step diff, failure screenshot, page source, Playwright trace).
+#
+# Why this is committed deliberately:
+# * Scope is the home-assignment demo only; this test file will not ship as
+#   part of any production codebase.
+# * The key has no sensitive policy data attached (open-policy tenant).
+# * Reviewers can run the demo without provisioning anything.
+#
+# Production hardening (NOT done here, intentional):
+# * In production this would move to env (e.g.
+#   `PROMPT_SECURITY_DEMO_OPEN_POLICY_API_KEY`), be documented in
+#   `.env.example`, and the file would `pytest.skip(allow_module_level=True)`
+#   when the env var is absent.
+# * Do **not** copy this hardcoded pattern into any other test file.
+# ---------------------------------------------------------------------------
 _OPEN_POLICY_API_KEY = SecretStr("cc6a6cfc-9570-4e5a-b6ea-92d2adac90e4")
 _OPEN_POLICY_API_DOMAIN = "eu.prompt.security"
 
@@ -119,10 +135,12 @@ async def browser_context_with_open_extension(
         api_key_override=_OPEN_POLICY_API_KEY,
         wait_for_block_active=False,
     ) as (ctx, ext_id):
-        request.instance._playwright_loop = asyncio.get_running_loop()
         request.instance.context = ctx
         request.instance.chrome_extension_id = ext_id
-        yield
+        try:
+            yield
+        finally:
+            await _capture_failure_artifacts(request)
 
 
 @allure.epic("Prompt Security")
@@ -184,11 +202,22 @@ class TestFailureDemo:
         """[EXPECTED FAIL] Open-policy extension: Gemini loads instead of showing block overlay.
 
         Steps:
-        1. Open a page in the per-test browser — extension loaded with open-policy API key (no block rules)
-        2. Navigate to https://gemini.google.com/ — extension authenticates but has no block rules
+        1. Open a page in the per-test browser — extension loaded with open-policy
+           API key (no block rules); the production policy-activation probe is
+           skipped via `wait_for_block_active=False`
+        2. Navigate to https://gemini.google.com/ — extension authenticates but has
+           no block rules, so Gemini loads normally (final URL: `https://...`)
         3. Wait for post-navigation state to settle
-        4. Assert final URL scheme is chrome-extension (INTENTIONALLY WRONG — causes this test to fail)
-        5. Actual: scheme is https — site loaded normally; block-overlay never appeared
+        4. Assert final URL scheme is `chrome-extension` (INTENTIONALLY WRONG —
+           records a soft failure via `SoftAssert.check_*`)
+        5. Assert overlay snapshot present (also soft-fails)
+        6. The two soft failures are collected without aborting; downstream
+           steps in `_open_and_expect_blocked` short-circuit at the
+           `if overlay is None: return` guard
+        7. `teardown_method` calls `assert_all()`, which raises with both
+           failures and triggers the async `_capture_on_failure` autouse
+           fixture to attach `failure_screenshot`, `page_source`, and the
+           Playwright trace ZIP — exactly what the demo is here to prove
         """
         logger.info("Running failure demo: Gemini block assertion (expecting failure)")
         await run_block_assertion(self, GEMINI)
@@ -209,11 +238,22 @@ class TestFailureDemo:
         """[EXPECTED FAIL] Open-policy extension: Claude AI loads instead of showing block overlay.
 
         Steps:
-        1. Open a page in the per-test browser — extension loaded with open-policy API key (no block rules)
-        2. Navigate to https://claude.ai/ — extension authenticates but has no block rules
+        1. Open a page in the per-test browser — extension loaded with open-policy
+           API key (no block rules); the production policy-activation probe is
+           skipped via `wait_for_block_active=False`
+        2. Navigate to https://claude.ai/ — extension authenticates but has no
+           block rules, so Claude loads normally (final URL: `https://...`)
         3. Wait for post-navigation state to settle
-        4. Assert final URL scheme is chrome-extension (INTENTIONALLY WRONG — causes this test to fail)
-        5. Actual: scheme is https — site loaded normally; block-overlay never appeared
+        4. Assert final URL scheme is `chrome-extension` (INTENTIONALLY WRONG —
+           records a soft failure via `SoftAssert.check_*`)
+        5. Assert overlay snapshot present (also soft-fails)
+        6. The two soft failures are collected without aborting; downstream
+           steps in `_open_and_expect_blocked` short-circuit at the
+           `if overlay is None: return` guard
+        7. `teardown_method` calls `assert_all()`, which raises with both
+           failures and triggers the async `_capture_on_failure` autouse
+           fixture to attach `failure_screenshot`, `page_source`, and the
+           Playwright trace ZIP — exactly what the demo is here to prove
         """
         logger.info("Running failure demo: Claude AI block assertion (expecting failure)")
         await run_block_assertion(self, CLAUDE)

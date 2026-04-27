@@ -85,6 +85,7 @@ addopts = [
     "--report=reports/report.html",
     "-ra",
     "-s",
+    "--strict-markers",
 ]
 log_cli = true
 log_cli_level = "INFO"

@@ -1,4 +1,23 @@
-"""Soft assertions with Allure step integration (non-blocking checks until assert_all)."""
+"""Soft assertions with Allure step integration (non-blocking checks until assert_all).
+
+Two severities are supported:
+
+* **Soft errors** (``check_*`` / ``fail``) — collected during the test, attached
+  to the corresponding Allure step as red evidence, and surfaced as a single
+  ``pytest.fail`` from :meth:`assert_all` in ``teardown_method``. Subsequent
+  steps **do** run, so the report shows the full failure surface — not just
+  the first one.
+
+* **Best-effort warnings** (``note``) — collected during the test, attached
+  to the Allure report as yellow evidence at teardown, but **never** fail the
+  test. Use for rendering-evidence checks where a regression is informational
+  (the page didn't render quite the way we expected) but doesn't change the
+  pass/fail verdict.
+
+Unexpected exceptions raised inside :meth:`step` (e.g. Playwright timeouts,
+network errors) still abort the test — they mean the check itself couldn't
+run, which is materially different from a check that ran and returned False.
+"""
 
 from __future__ import annotations
 
@@ -13,28 +32,38 @@ if TYPE_CHECKING:
 
 
 class SoftAssert:
-    """Collect assertion failures and report them together; integrates with allure.step."""
+    """Collect assertion failures (and best-effort warnings) and report them together."""
 
     def __init__(self) -> None:
         self.errors: list[str] = []
+        self.warnings: list[str] = []
 
     @contextmanager
     def step(self, step_name: str) -> Iterator[None]:
-        """Allure step with soft-assert error tracking."""
+        """Allure step that records soft-check failures without aborting the test.
+
+        - Soft check failures recorded inside the block are attached to *this*
+          Allure step as a TEXT attachment (so the timeline still shows
+          *which* step contributed which errors), and the test continues
+          running subsequent steps.
+        - Unexpected exceptions inside the block are recorded as failures and
+          re-raised — those mean the check itself couldn't run, which is a
+          hard error.
+        """
         errors_before = len(self.errors)
         with allure.step(step_name):
             try:
                 yield
             except Exception as e:
-                self.fail(f"{step_name} failed: {e!s}")
-
-            if len(self.errors) > errors_before:
-                step_errors = self.errors[errors_before:]
-                # Clear the errors we are about to raise so that a subsequent
-                # call to assert_all() in teardown_method does not double-report
-                # the same failures as a teardown ERROR.
-                self.errors = self.errors[:errors_before]
-                raise AssertionError("; ".join(step_errors))
+                self.fail(f"{step_name} crashed: {e!s}")
+                raise
+            new_errors = self.errors[errors_before:]
+            if new_errors:
+                allure.attach(
+                    "\n".join(new_errors),
+                    name=f"{step_name} — soft failures",
+                    attachment_type=allure.attachment_type.TEXT,
+                )
 
     def check(self, condition: bool, msg: str) -> None:
         if not condition:
@@ -67,7 +96,38 @@ class SoftAssert:
     def fail(self, msg: str) -> None:
         self.errors.append(msg)
 
+    def note(self, condition: bool, msg: str) -> None:
+        """Best-effort check: record as warning evidence, never fail the test.
+
+        Use for assertions where a regression is informational (e.g. an overlay
+        DOM marker that the rendering team owns and may revise) rather than a
+        signal that the system-under-test is broken. The collected warnings are
+        surfaced in Allure at teardown so triage can still see *what* drifted.
+        """
+        if not condition:
+            self.warnings.append(msg)
+
     def assert_all(self) -> None:
-        if self.errors:
-            msg = "Soft assert failures:\n" + "\n".join(self.errors)
+        """Attach warnings, fail with all collected errors, and clear state.
+
+        Idempotent: a second call after the first one fired (or after the
+        errors / warnings were already drained) is a no-op. This lets the
+        helper functions call ``assert_all()`` at the end of the test body
+        — so the failure happens in the **call** phase while the page is
+        still alive (enabling the failure screenshot fixture to fire) —
+        without the class-level ``teardown_method`` hook double-raising the
+        same errors as a teardown ERROR.
+        """
+        warnings = self.warnings
+        errors = self.errors
+        self.warnings = []
+        self.errors = []
+        if warnings:
+            allure.attach(
+                "\n".join(warnings),
+                name="Best-effort checks (rendering evidence)",
+                attachment_type=allure.attachment_type.TEXT,
+            )
+        if errors:
+            msg = "Soft assert failures:\n" + "\n".join(errors)
             pytest.fail(msg, pytrace=False)

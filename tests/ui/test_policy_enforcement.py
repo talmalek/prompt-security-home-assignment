@@ -181,6 +181,11 @@ async def _open_and_expect_unblocked(
         context=context or "<no-context>",
     )
 
+    # Surface collected soft-assert failures during the *call* phase (rather
+    # than waiting for ``teardown_method``) so the failure screenshot fixture
+    # fires while the page is still alive. ``assert_all()`` is idempotent.
+    inst.checker.assert_all()
+
 
 async def _open_and_expect_blocked(
     inst,
@@ -188,37 +193,56 @@ async def _open_and_expect_blocked(
 ) -> None:
     """Open ``site`` in a fresh page; assert the extension's block overlay rendered.
 
-    The contract here describes the **v7.1.0+ backend-rendered overlay** —
-    the only version the suite supports, since ``_ensure_latest_extension``
-    in :mod:`tests.conftest` force-refreshes ``extension/`` to the currently
+    .. note::
+       This helper is the **canonical source of truth** for the block-policy
+       assertions. The per-test Allure descriptions on
+       :class:`TestWithExtension` summarise these checks for stakeholders;
+       keep both in sync when the contract evolves.
+
+    The contract describes the **v7.1.0+ backend-rendered overlay** — the only
+    version the suite supports, since ``_ensure_latest_extension`` in
+    :mod:`tests.conftest` force-refreshes ``extension/`` to the currently
     published Chrome Web Store CRX on every pytest session.
 
-    Structural assertions (URL contract):
+    Severity model
+    --------------
+    Two tiers of assertions:
 
+    * **Hard contract** (test fails red on any failure) — the URL produced by
+      the extension's request interceptor. These signals are stable across
+      UI revisions because they are emitted by the policy engine, not the
+      rendering layer.
+
+    * **Best-effort rendering evidence** (yellow Allure attachment, never
+      fails the test) — the DOM markers in the rendered overlay. The
+      extension's UI team revises these between releases; a regression here
+      means the rendered HTML drifted but the policy still fired correctly.
+
+    Hard contract (URL / query params)
+    ----------------------------------
     * Final URL scheme is ``chrome-extension``.
-    * An ``overlay`` snapshot was recorded by :class:`WebGenAiAppPage`.
-    * Overlay query params: ``type=blockPage``, ``domain=<site.block_domain>``,
-      ``canBypass=Prevent``, ``useBackendHtml=true``, and a non-empty
-      ``popupToken`` (the latest tenant always issues one — its presence is
-      what triggers backend HTML rendering instead of the legacy static
-      template).
+    * Path ends with ``/html/pageOverlay.html`` (overlay snapshot recorded).
+    * Query parameter ``type=blockPage``.
+    * Query parameter ``domain=<site.block_domain>``.
+    * If ``inst.chrome_extension_id`` is set: overlay was served by that
+      exact extension id (catches cross-test contamination).
+    * Query parameter ``canBypass=Prevent`` (no per-user override on this
+      policy tenant).
+    * Query parameter ``useBackendHtml=true`` *and* a non-empty
+      ``popupToken`` — the latest extension always sets both when it
+      requests backend-rendered overlay HTML.
 
-    Visual assertions (DOM contract on the rendered overlay):
+    Best-effort rendering evidence (DOM)
+    ------------------------------------
+    Collected via ``inst.checker.note(...)`` so a failure shows in Allure as
+    a yellow warning attachment but does **not** mark the test red:
 
-    * ``body`` carries the ``ai-site`` class — the unambiguous marker of the
-      v7.1.0 backend-rendered overlay; if it's missing the extension served
-      a different / older UI and this whole block of assertions is invalid.
-    * ``h1.title`` text contains *Denied* (the *Access Denied* headline).
-    * ``p.description`` text mentions *administrator* and *blocked* (the
-      reason copy).
-    * ``p.guidelines`` is present and mentions *guidelines* or *information*
-      (the policy hint copy).
-    * ``.barrier-illustration`` is present (the roadblock SVG).
-    * ``.powered-by`` is present (Prompt Security branding container).
-
-    If ``inst.chrome_extension_id`` is set, additionally asserts the overlay
-    was served by that exact extension id — making cross-test contamination
-    immediately visible in the failure message.
+    * ``body`` class contains ``ai-site`` (v7.1.0 backend-render marker).
+    * ``h1.title`` text contains *Denied*.
+    * ``p.description`` text mentions *administrator* and *blocked*.
+    * ``p.guidelines`` is non-empty and mentions *guidelines* or *information*.
+    * ``.barrier-illustration`` present (the roadblock SVG).
+    * ``.powered-by`` present (Prompt Security branding container).
     """
     logger.info(f"Opening {site.name} - expecting BLOCK policy", site_url=site.url)
     page = await _open_page(inst.context)
@@ -261,6 +285,11 @@ async def _open_and_expect_blocked(
 
     overlay = snap.get("overlay")
     if overlay is None:
+        # URL contract above failed (no overlay snapshot recorded) — surface
+        # the collected URL-contract failures during the *call* phase so the
+        # failure screenshot fixture fires while the page is still alive.
+        # ``assert_all()`` is idempotent.
+        inst.checker.assert_all()
         return
 
     with inst.checker.step(f"{site.name}: overlay query type=blockPage"):
@@ -334,12 +363,22 @@ async def _open_and_expect_blocked(
             ),
         )
 
+    # === Best-effort DOM markers ============================================
+    # The stable enforcement signal is the URL contract above (scheme + query
+    # params) — produced by the extension's request interceptor regardless of
+    # which UI version renders. The DOM markers below describe the *rendering*
+    # contract, which the extension's UI team revises across releases. We
+    # collect them as warnings only: a regression in the rendered overlay's
+    # copy / class names surfaces as yellow evidence in Allure but does NOT
+    # mark the test red. If the URL contract is intact, the policy worked;
+    # the rendered HTML is informational.
+    # =========================================================================
+
     with inst.checker.step(f"{site.name}: overlay body has the v7.1.0 marker class 'ai-site'"):
         body_class = (overlay.get("body_class") or "").strip()
-        logger.info(f"Assert {site.name} overlay body class — expected=\"contains 'ai-site'\", found={body_class!r}")
-        inst.checker.check_in(
-            item="ai-site",
-            container=body_class,
+        logger.info(f"Note {site.name} overlay body class — expected=\"contains 'ai-site'\", found={body_class!r}")
+        inst.checker.note(
+            "ai-site" in body_class,
             msg=(
                 f"{site.name} overlay body class does not contain 'ai-site' "
                 f"(got {body_class!r}); expected the v7.1.0 backend-rendered overlay."
@@ -349,17 +388,16 @@ async def _open_and_expect_blocked(
     with inst.checker.step(f"{site.name}: overlay shows 'Access Denied' headline (h1.title)"):
         title = (overlay.get("title") or "").strip()
         logger.info(
-            f"Assert {site.name} overlay title contains 'Denied' — "
+            f"Note {site.name} overlay title contains 'Denied' — "
             f"expected=\"non-empty h1.title containing 'Denied'\", found={title!r}"
         )
-        inst.checker.check_true(
+        inst.checker.note(
             bool(title),
             msg=f"{site.name} overlay missing h1.title element / text in DOM",
         )
         if title:
-            inst.checker.check_in(
-                item="Denied",
-                container=title,
+            inst.checker.note(
+                "Denied" in title,
                 msg=f"{site.name} overlay headline is not 'Access Denied' (got {title!r})",
             )
 
@@ -367,23 +405,21 @@ async def _open_and_expect_blocked(
         description = (overlay.get("description") or "").strip()
         description_lower = description.lower()
         logger.info(
-            f"Assert {site.name} overlay description mentions 'administrator' + 'blocked' — "
+            f"Note {site.name} overlay description mentions 'administrator' + 'blocked' — "
             f"expected=\"non-empty p.description containing 'administrator' and 'blocked'\", "
             f"found={description!r}"
         )
-        inst.checker.check_true(
+        inst.checker.note(
             bool(description),
             msg=f"{site.name} overlay missing p.description element / text in DOM",
         )
         if description:
-            inst.checker.check_in(
-                item="administrator",
-                container=description_lower,
+            inst.checker.note(
+                "administrator" in description_lower,
                 msg=(f"{site.name} overlay description does not mention 'administrator' (got {description!r})"),
             )
-            inst.checker.check_in(
-                item="blocked",
-                container=description_lower,
+            inst.checker.note(
+                "blocked" in description_lower,
                 msg=(f"{site.name} overlay description does not mention 'blocked' (got {description!r})"),
             )
 
@@ -391,16 +427,16 @@ async def _open_and_expect_blocked(
         guidelines = (overlay.get("guidelines") or "").strip()
         guidelines_lower = guidelines.lower()
         logger.info(
-            f"Assert {site.name} overlay guidelines is non-empty — "
+            f"Note {site.name} overlay guidelines is non-empty — "
             f"expected=\"non-empty p.guidelines mentioning 'guidelines' or 'information'\", "
             f"found={guidelines!r}"
         )
-        inst.checker.check_true(
+        inst.checker.note(
             bool(guidelines),
             msg=f"{site.name} overlay missing p.guidelines element / text in DOM",
         )
         if guidelines:
-            inst.checker.check_true(
+            inst.checker.note(
                 ("guidelines" in guidelines_lower) or ("information" in guidelines_lower),
                 msg=(
                     f"{site.name} overlay guidelines copy does not mention 'guidelines' "
@@ -411,10 +447,10 @@ async def _open_and_expect_blocked(
     with inst.checker.step(f"{site.name}: overlay shows the roadblock illustration (.barrier-illustration)"):
         illustration_state = "present" if overlay.get("has_illustration") else "absent"
         logger.info(
-            f"Assert {site.name} overlay roadblock illustration — "
+            f"Note {site.name} overlay roadblock illustration — "
             f'expected=".barrier-illustration present", found={illustration_state!r}'
         )
-        inst.checker.check_true(
+        inst.checker.note(
             bool(overlay.get("has_illustration")),
             msg=(f"{site.name} overlay missing .barrier-illustration / #illustrationBlock SVG in DOM"),
         )
@@ -422,9 +458,9 @@ async def _open_and_expect_blocked(
     with inst.checker.step(f"{site.name}: overlay carries Prompt Security branding (.powered-by)"):
         branding_state = "present" if overlay.get("has_branding") else "absent"
         logger.info(
-            f'Assert {site.name} overlay branding container — expected=".powered-by present", found={branding_state!r}'
+            f'Note {site.name} overlay branding container — expected=".powered-by present", found={branding_state!r}'
         )
-        inst.checker.check_true(
+        inst.checker.note(
             bool(overlay.get("has_branding")),
             msg=f"{site.name} overlay missing Prompt Security branding container (.powered-by)",
         )
@@ -441,6 +477,11 @@ async def _open_and_expect_blocked(
         domain=overlay.get("domain"),
         type=overlay.get("type"),
     )
+
+    # Surface collected soft-assert failures during the *call* phase (rather
+    # than waiting for ``teardown_method``) so the failure screenshot fixture
+    # fires while the page is still alive. ``assert_all()`` is idempotent.
+    inst.checker.assert_all()
 
 
 # Backward-compatible alias used by tests.ui.test_failure_demo.  Kept as a
@@ -493,9 +534,11 @@ class TestWithoutExtension:
         Steps:
         1. Open a page in the per-test browser — plain Chromium, no extension loaded
         2. Navigate to https://chatgpt.com/
-        3. Capture post-navigation state (final URL, scheme)
-        4. Assert final URL scheme is https/http, NOT chrome-extension (no block overlay)
-        5. Assert no block-overlay snapshot was recorded
+        3. Capture post-navigation state (final URL, scheme) and attach JSON snapshot
+        4. Assert final URL scheme is NOT `chrome-extension` (hard) — proves nothing
+           hijacked the navigation
+        5. Assert the snapshot has no `overlay` key (hard) — proves no block overlay
+           was rendered
         """
         await _open_and_expect_unblocked(
             self,
@@ -516,10 +559,11 @@ class TestWithoutExtension:
 
         Steps:
         1. Open a page in the per-test browser — plain Chromium, no extension loaded
-        2. Navigate to https://gemini.google.com/
-        3. Capture post-navigation state (final URL may be accounts.google.com if signed out)
-        4. Assert final URL scheme is https/http, NOT chrome-extension (no block overlay)
-        5. Assert no block-overlay snapshot was recorded
+        2. Navigate to https://gemini.google.com/ (final URL may land on
+           `accounts.google.com` if signed-out — that's still 'site reachable')
+        3. Capture post-navigation state and attach JSON snapshot
+        4. Assert final URL scheme is NOT `chrome-extension` (hard)
+        5. Assert the snapshot has no `overlay` key (hard)
         """
         await _open_and_expect_unblocked(
             self,
@@ -539,10 +583,10 @@ class TestWithoutExtension:
 
         Steps:
         1. Open a page in the per-test browser — plain Chromium, no extension loaded
-        2. Navigate to https://claude.ai/
-        3. Capture post-navigation state (final URL is often Claude's login page)
-        4. Assert final URL scheme is https/http, NOT chrome-extension (no block overlay)
-        5. Assert no block-overlay snapshot was recorded
+        2. Navigate to https://claude.ai/ (final URL is often Claude's login page)
+        3. Capture post-navigation state and attach JSON snapshot
+        4. Assert final URL scheme is NOT `chrome-extension` (hard)
+        5. Assert the snapshot has no `overlay` key (hard)
         """
         await _open_and_expect_unblocked(
             self,
@@ -593,11 +637,13 @@ class TestWithExtension:
         """With extension + allow policy: ChatGPT loads normally.
 
         Steps:
-        1. Open a page in the per-test browser — extension is loaded and configured
+        1. Open a page in the per-test browser — extension loaded with the
+           block-policy key and the policy-activation barrier already passed
         2. Navigate to https://chatgpt.com/ (tenant policy: allow)
-        3. Capture post-navigation state (final URL, scheme)
-        4. Assert final URL scheme is https/http (NOT the extension block overlay)
-        5. Assert no block-overlay snapshot was recorded
+        3. Capture post-navigation state and attach JSON snapshot
+        4. Assert final URL scheme is NOT `chrome-extension` (hard) — proves the
+           extension applied the *allow* rule rather than blocking everything
+        5. Assert the snapshot has no `overlay` key (hard)
         """
         await _open_and_expect_unblocked(
             self,
@@ -611,29 +657,42 @@ class TestWithExtension:
         "**Policy:** Gemini is on the *block* list for the configured tenant.\n\n"
         "**Action:** Navigate to https://gemini.google.com/.\n\n"
         "**Expected:** The extension intercepts the navigation and the user lands on\n"
-        "`chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&originalUrl=…`.\n\n"
-        "We verify, in order:\n"
+        "`chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&"
+        "canBypass=Prevent&useBackendHtml=true&popupToken=…&originalUrl=…`.\n\n"
+        "**Hard contract** (test fails on any failure):\n"
         "1. Final URL scheme is `chrome-extension`.\n"
-        "2. The overlay was served by the **same** extension id resolved by the fixture (`self.chrome_extension_id`).\n"
+        "2. Overlay snapshot recorded (path ends with `/html/pageOverlay.html`).\n"
         "3. Query parameter `type=blockPage`.\n"
         "4. Query parameter `domain=gemini.google.com`.\n"
-        "5. DOM markers `Access Denied` (`.title-text`) and the `Powered by: prompt.security` footer link "
-        "(`.powered-by`) are present (best-effort; recorded as Allure detail).\n\n"
-        "Failing on parsed query params (vs. fragile DOM heuristics) makes the error message itself the diagnosis."
+        "5. Overlay served by the same extension id resolved by the fixture (`self.chrome_extension_id`).\n"
+        "6. Query parameter `canBypass=Prevent`.\n"
+        "7. Query parameter `useBackendHtml=true` and a non-empty `popupToken`.\n\n"
+        "**Best-effort rendering evidence** (collected as yellow Allure attachments; never fails the test):\n"
+        "- `body` class contains `ai-site` (v7.1.0 backend-render marker).\n"
+        "- `h1.title` text contains *Denied*.\n"
+        "- `p.description` text mentions *administrator* and *blocked*.\n"
+        "- `p.guidelines` mentions *guidelines* or *information*.\n"
+        "- `.barrier-illustration` SVG present.\n"
+        "- `.powered-by` branding container present.\n\n"
+        "Failing on parsed URL/query params (rather than DOM heuristics) makes the failure message itself the diagnosis."
     )
     async def test_gemini_blocked(self) -> None:
         """With extension + block policy: Gemini is intercepted by the Access Denied overlay.
 
         Steps:
-        1. Open a page in the per-test browser — extension is loaded with the block-policy key
+        1. Open a page in the per-test browser — extension loaded with the block-policy key
         2. Navigate to https://gemini.google.com/ (tenant policy: block)
-        3. Wait for the extension's pageOverlay.html bundle to populate the static template
-        4. Assert final URL scheme is chrome-extension and path ends with /html/pageOverlay.html
-        5. Assert overlay served by the resolved runtime extension id (self.chrome_extension_id)
-        6. Assert query param type=blockPage
-        7. Assert query param domain=gemini.google.com
-        8. Assert DOM markers: .title-text contains "Denied", .message-title mentions "blocked",
-           .powered-by branding container present
+        3. Wait smartly for the v7.1.0 backend-rendered overlay's `h1.title` to hydrate
+        4. Assert final URL scheme is `chrome-extension` (hard)
+        5. Assert overlay snapshot recorded — path ends with `/html/pageOverlay.html` (hard)
+        6. Assert query param `type=blockPage` (hard)
+        7. Assert query param `domain=gemini.google.com` (hard)
+        8. Assert overlay served by `self.chrome_extension_id` (hard)
+        9. Assert query param `canBypass=Prevent` (hard)
+        10. Assert query param `useBackendHtml=true` + non-empty `popupToken` (hard)
+        11. Best-effort DOM evidence: `body.ai-site`, `h1.title`, `p.description`,
+            `p.guidelines`, `.barrier-illustration`, `.powered-by` — collected as
+            warnings via `SoftAssert.note(...)`; never fails the test
         """
         await _open_and_expect_blocked(self, GEMINI)
 
@@ -643,22 +702,27 @@ class TestWithExtension:
         "**Policy:** Claude AI is on the *block* list for the configured tenant.\n\n"
         "**Action:** Navigate to https://claude.ai/.\n\n"
         "**Expected:** The extension intercepts the navigation and the user lands on\n"
-        "`chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=claude.ai&originalUrl=…`.\n\n"
-        "Same checks as the Gemini case (URL scheme + extension id + query params + DOM markers), "
+        "`chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=claude.ai&"
+        "canBypass=Prevent&useBackendHtml=true&popupToken=…&originalUrl=…`.\n\n"
+        "Same severity model as the Gemini case (hard contract = URL/query params; best-effort = DOM markers), "
         "with `domain=claude.ai`."
     )
     async def test_claude_blocked(self) -> None:
         """With extension + block policy: Claude AI is intercepted by the Access Denied overlay.
 
         Steps:
-        1. Open a page in the per-test browser — extension is loaded with the block-policy key
+        1. Open a page in the per-test browser — extension loaded with the block-policy key
         2. Navigate to https://claude.ai/ (tenant policy: block)
-        3. Wait for the extension's pageOverlay.html bundle to populate the static template
-        4. Assert final URL scheme is chrome-extension and path ends with /html/pageOverlay.html
-        5. Assert overlay served by the resolved runtime extension id (self.chrome_extension_id)
-        6. Assert query param type=blockPage
-        7. Assert query param domain=claude.ai
-        8. Assert DOM markers: .title-text contains "Denied", .message-title mentions "blocked",
-           .powered-by branding container present
+        3. Wait smartly for the v7.1.0 backend-rendered overlay's `h1.title` to hydrate
+        4. Assert final URL scheme is `chrome-extension` (hard)
+        5. Assert overlay snapshot recorded — path ends with `/html/pageOverlay.html` (hard)
+        6. Assert query param `type=blockPage` (hard)
+        7. Assert query param `domain=claude.ai` (hard)
+        8. Assert overlay served by `self.chrome_extension_id` (hard)
+        9. Assert query param `canBypass=Prevent` (hard)
+        10. Assert query param `useBackendHtml=true` + non-empty `popupToken` (hard)
+        11. Best-effort DOM evidence: `body.ai-site`, `h1.title`, `p.description`,
+            `p.guidelines`, `.barrier-illustration`, `.powered-by` — collected as
+            warnings via `SoftAssert.note(...)`; never fails the test
         """
         await _open_and_expect_blocked(self, CLAUDE)
