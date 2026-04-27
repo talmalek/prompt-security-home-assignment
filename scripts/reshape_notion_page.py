@@ -60,7 +60,7 @@ STATUS_OPTION_COLORS: dict[str, str] = {
 # Marker chosen to appear ONLY in the latest narrative version.  Changing this
 # string forces a full re-insertion on the next run (old blocks are archived by
 # _archive_stale_blocks since they no longer match our_ids).
-NARRATIVE_MARKER = "6 passing · 2 intentional-failure demo"
+NARRATIVE_MARKER = "6 production tests + 2 intentional-failure demos"
 
 
 def _rt(text: str, *, bold: bool = False, link: str | None = None) -> dict[str, Any]:
@@ -116,8 +116,7 @@ def _new_narrative() -> list[dict[str, Any]]:
                 _rt("Automated UI test results for "),
                 _rt("Prompt Security browser extension policy enforcement", bold=True),
                 _rt(
-                    " — 8 test scenarios total: "
-                    "6 passing · 2 intentional-failure demo. "
+                    " — 8 test scenarios total: 6 production tests + 2 intentional-failure demos. "
                     "Each row below is one CI run, with direct links to Allure and "
                     "GitHub Actions for engineer drill-down."
                 ),
@@ -149,6 +148,30 @@ def _new_narrative() -> list[dict[str, Any]]:
         ),
         _bullet(
             [
+                _rt("Browser isolation: "),
+                _rt("one fresh Chromium per test", bold=True),
+                _rt(
+                    " — every test launches its own browser on a freshly-wiped user-data "
+                    "directory and opens the target site in a single page (no shared tabs, "
+                    "no shared cookies, no shared bot-score state). This eliminates "
+                    "Cloudflare reputation carry-over and cross-test contamination."
+                ),
+            ]
+        ),
+        _bullet(
+            [
+                _rt("Extension version: "),
+                _rt("always the latest published CRX", bold=True),
+                _rt(
+                    " — every pytest session (local and CI alike) force-fetches the "
+                    "currently published Chrome Web Store extension before any browser "
+                    "launches.  No local/CI version drift; the suite always validates "
+                    "the latest released extension automatically."
+                ),
+            ]
+        ),
+        _bullet(
+            [
                 _rt(
                     "Runner: GitHub Actions · Ubuntu · Python 3.12 · headed Chromium under Xvfb "
                     "(extension load requires headed mode)."
@@ -158,8 +181,9 @@ def _new_narrative() -> list[dict[str, Any]]:
         _bullet(
             [
                 _rt(
-                    "Framework: Pytest + async Playwright (`launch_persistent_context` with "
-                    "`--load-extension`) + Page Object Model + Allure."
+                    "Framework: Pytest + async Playwright (function-scoped "
+                    "`launch_persistent_context` with `--load-extension`) + "
+                    "Page Object Model + Allure."
                 )
             ]
         ),
@@ -169,7 +193,9 @@ def _new_narrative() -> list[dict[str, Any]]:
                 _rt("Baseline (3 tests, no extension): "),
                 _rt("ChatGPT · Gemini · Claude AI", bold=True),
                 _rt(
-                    " each load normally — proves blocks observed in the next class "
+                    " — each launches its own clean Chromium, navigates to the host, and "
+                    "asserts the navigation reached a real web origin (no `chrome-extension://` "
+                    "redirect, no overlay snapshot).  Proves blocks observed in the next class "
                     "are caused by the extension, not the environment."
                 ),
             ]
@@ -178,7 +204,11 @@ def _new_narrative() -> list[dict[str, Any]]:
             [
                 _rt("Extension installed — allow (1 test): "),
                 _rt("chatgpt.com", bold=True),
-                _rt(" loads normally — confirms allow-list policy is respected."),
+                _rt(
+                    " — fresh Chromium launched with the latest extension and tenant policy "
+                    "active, navigates to ChatGPT and verifies the extension does NOT redirect "
+                    "to its block overlay.  Confirms the allow-list policy is respected."
+                ),
             ]
         ),
         _bullet(
@@ -188,9 +218,15 @@ def _new_narrative() -> list[dict[str, Any]]:
                 _rt(" and "),
                 _rt("claude.ai", bold=True),
                 _rt(
-                    " each land on the Prompt Security Access Denied overlay "
-                    "(`chrome-extension://<id>/html/pageOverlay.html?type=blockPage&domain=…`). "
-                    "Assertions key off parsed URL query params — not fragile DOM text."
+                    " — each in its own fresh Chromium with the latest extension. "
+                    "Navigation lands on the Prompt Security Access Denied overlay "
+                    "(`chrome-extension://<id>/html/pageOverlay.html?…`). Assertions verify "
+                    "BOTH the URL query (`type=blockPage`, correct `domain`, "
+                    "`canBypass=Prevent`, `useBackendHtml=true`, non-empty `popupToken`) AND "
+                    "the rendered DOM of the v7.1.0 backend-rendered overlay "
+                    "(`body.ai-site`, `h1.title='Access Denied'`, `p.description` mentioning "
+                    "administrator + blocked, `p.guidelines`, `.barrier-illustration` SVG, "
+                    "`.powered-by` branding)."
                 ),
             ]
         ),

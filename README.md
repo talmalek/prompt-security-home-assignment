@@ -128,39 +128,43 @@ sites are reachable in a vanilla browser — i.e. any block detected in
 
 Three tests, one site each:
 
-* **ChatGPT (allow):** final URL is a normal web origin — extension respects the
-  allow rule.
+* **ChatGPT (allow):** final URL is a normal web origin (no `chrome-extension://`
+  redirect, no overlay snapshot) — extension respects the allow rule.
 * **Gemini (block):** final URL is
-  `chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&canBypass=Prevent&…`.
-  Assertions key off parsed URL query parameters (`type`, `domain`, extension id,
-  `canBypass`) — *not* fragile DOM text — so the failure message is itself the
-  diagnosis.
-* **Claude AI (block):** same as Gemini, `domain=claude.ai`.
+  `chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&canBypass=Prevent&useBackendHtml=true&popupToken=…`.
+  Assertions verify **both** the URL query (`type`, `domain`, extension id,
+  `canBypass`, `useBackendHtml=true`, non-empty `popupToken`) **and** the rendered
+  DOM of the v7.1.0+ backend-rendered overlay (see below) — so a failure message
+  is precise about *which* part drifted.
+* **Claude AI (block):** same shape as Gemini, with `domain=claude.ai`.
 
-DOM markers from the static `pageOverlay.html` template (populated at runtime by
-`bundle/pageOverlay.bundle.js`) are collected as Allure evidence: `.title-text`
-("Access Denied"), `.message-title` (administrator-blocked message such as
-*"The domain claude.ai was blocked by your administrator"*), and the
-`.powered-by` Prompt Security branding container.
+DOM contract for the **v7.1.0+ backend-rendered overlay** (the only UI the
+suite supports — see "Always testing the latest release" above):
 
-> **Note on extension drift.** The extension's overlay has changed twice during
-> this project. CI always fetches the latest CRX from the Chrome Web Store, so
-> each shape was caught the moment it shipped and the tests were updated
-> alongside:
->
-> 1. **v7.0.49** — original static `pageOverlay.html` template, id-based
->    selectors (`#title-text`, `#message-title`, `#poweredBy`).
-> 2. **v7.0.59** — switched to a **backend-rendered** HTML payload (URL query
->    carried `useBackendHtml=true` and a `popupToken`); selectors became
->    class-based (`.title`, `.description`) and the `body` gained a `.ai-site`
->    class.
-> 3. **v7.0.591** *(current)* — reverted to the static `pageOverlay.html`
->    template populated at runtime by the bundle. The page object now waits for
->    `document.querySelector('.title-text')?.textContent` to be **non-empty**
->    (template ships the elements empty until the bundle hydrates them) and
->    asserts on `.title-text`, `.message-title`, and `.powered-by`. The
->    structural URL contract is unchanged — `chrome-extension://<id>/html/pageOverlay.html?type=blockPage&domain=…&canBypass=Prevent`
->    — and remains the primary diagnosis surface.
+| Selector | Asserted property |
+|---|---|
+| `body.ai-site`            | class present (single signal that we're on the latest backend-rendered overlay) |
+| `h1.title`                | non-empty text containing *Denied* (the "Access Denied" headline) |
+| `p.description`           | non-empty text containing *administrator* and *blocked* (the reason copy) |
+| `p.guidelines`            | non-empty text mentioning *guidelines* or *information* (the policy hint copy) |
+| `.barrier-illustration` (`#illustrationBlock`) | element present (the roadblock SVG — visual signal of the block UI) |
+| `.powered-by`             | element present (Prompt Security branding container) |
+
+The page object (`tests/pages/web_app_page.py::assess_state`) smart-waits on
+`document.querySelector('h1.title')?.textContent` becoming non-empty before
+reading the snapshot — the v7.1.0 overlay ships an empty `<body>` and the
+bundle injects the backend-rendered HTML asynchronously.
+
+> **Note on extension drift.** Earlier extension releases shipped different
+> overlay shapes (`#title-text` / `.title-text` / `.message-title` static
+> templates), and the suite carried compatibility code for them.  That history
+> has been **deliberately retired** — CI and local runs alike force-fetch the
+> currently published Chrome Web Store CRX on every pytest session
+> (`tests/conftest.py::_ensure_latest_extension`), so the only contract we
+> maintain is whatever the **latest** extension renders.  When a future
+> release changes the overlay shape, the failing assertion will pinpoint the
+> exact selector that drifted, and the page object + helper update is a
+> small, focused diff.
 
 #### Failure pipeline demo — `TestFailureDemo`
 
@@ -200,9 +204,10 @@ every failing assertion in one Allure result instead of stopping at the first.
 
 ```mermaid
 flowchart TD
-    CRX["Chrome Web Store CRX"] -- fetch_extension.py --> ExtDir["extension/ (git-ignored)"]
+    CRX["Chrome Web Store CRX"] -- "fetch_extension.py --force\n(every pytest session)" --> ExtDir["extension/ (git-ignored)"]
+    Autouse["_ensure_latest_extension\n(session-scoped autouse fixture)"] -- triggers --> CRX
 
-    ExtDir --> Lifecycle["_persistent_context_lifecycle\n(conftest.py)"]
+    ExtDir --> Lifecycle["_persistent_context_lifecycle\n(function-scoped, one browser per test)"]
     Lifecycle --> Plain["browser_context_plain\n(no extension)"]
     Lifecycle --> WithExt["browser_context_with_extension\n(extension + API key from env)"]
     Lifecycle --> OpenExt["browser_context_with_open_extension\n(extension + open-policy key)"]
@@ -234,9 +239,13 @@ uv sync --all-groups
 uv run playwright install --with-deps chromium
 cp .env.example .env
 # Edit .env — set PROMPT_SECURITY_API_KEY (never commit real values)
-make extension          # downloads + unpacks the CRX
-uv run pytest -m smoke -v           # 6 production tests
-uv run pytest -v                    # all 8 (6 pass + 2 expected failures)
+# `make extension` is OPTIONAL — pytest's session-scoped autouse fixture
+# (_ensure_latest_extension) force-fetches the latest CRX before any test
+# launches a browser.  Run it manually only to inspect the unpacked CRX
+# offline, or to verify network access:
+make extension                        # optional pre-fetch (otherwise pytest handles it)
+uv run pytest -m smoke -v             # 6 production tests
+uv run pytest -v                      # all 8 (6 pass + 2 expected failures)
 uv run allure serve reports/allure-results   # open Allure locally
 ```
 
@@ -246,7 +255,11 @@ Tests run **headed** Chromium (CI uses **Xvfb**).  HTML report: `reports/report.
 
 Workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 
-1. Sync deps, install Playwright Chromium, fetch + unpack extension.
+1. Sync deps, install Playwright Chromium, force-fetch + unpack the latest
+   extension CRX (the dedicated step gives a clear failure signal if the
+   Chrome Web Store is unreachable; pytest's `_ensure_latest_extension`
+   autouse fixture also re-fetches at session start as a safety net, so the
+   suite **always** tests the currently published version).
 2. Install **Xvfb** then run `xvfb-run … uv run pytest -v` — all **8 tests**.
 3. Pytest step has `continue-on-error: true`: the 2 expected demo failures emit a
    `::warning::` in the log but never turn the workflow red.
