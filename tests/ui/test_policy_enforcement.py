@@ -441,13 +441,24 @@ class TestWithExtension:
                 )
 
         with self.checker.step(
-            f"[tab {tab}] Overlay carries 'Access Denied' title and 'Powered by: prompt.security' branding"
+            f"[tab {tab}] Overlay body has block-page class marker (body.ai-site)"
         ):
-            logger.info(f"[tab {tab}] Verifying overlay title and branding")
-            title = (overlay.get("title_text") or overlay.get("message_title") or "").strip()
+            logger.info(f"[tab {tab}] Verifying overlay body class marker")
+            body_class = overlay.get("body_class") or ""
+            self.checker.check_in(
+                item="ai-site",
+                container=body_class,
+                msg=f"{site.name} overlay body missing 'ai-site' class (got body.class={body_class!r})",
+            )
+
+        with self.checker.step(
+            f"[tab {tab}] Overlay shows 'Access Denied' title (.title)"
+        ):
+            logger.info(f"[tab {tab}] Verifying overlay title text")
+            title = (overlay.get("title_text") or "").strip()
             self.checker.check_true(
                 bool(title),
-                msg=f"{site.name} overlay missing #title-text / #message-title in DOM",
+                msg=f"{site.name} overlay missing .title element / text in DOM",
             )
             if title:
                 self.checker.check_in(
@@ -455,11 +466,46 @@ class TestWithExtension:
                     container=title,
                     msg=f"{site.name} overlay title is not 'Access Denied' (got {title!r})",
                 )
-            powered_by = overlay.get("powered_by") or ""
-            self.checker.check_in(
-                item="prompt.security",
-                container=powered_by,
-                msg=f"{site.name} overlay missing 'Powered by: prompt.security' link (got {powered_by!r})",
+
+        with self.checker.step(
+            f"[tab {tab}] Overlay description states the administrator blocked access (.description)"
+        ):
+            logger.info(f"[tab {tab}] Verifying overlay description text")
+            description = (overlay.get("description") or "").strip()
+            self.checker.check_true(
+                bool(description),
+                msg=f"{site.name} overlay missing .description element / text in DOM",
+            )
+            if description:
+                self.checker.check_in(
+                    item="blocked",
+                    container=description.lower(),
+                    msg=(
+                        f"{site.name} overlay description does not mention administrator block "
+                        f"(got {description!r})"
+                    ),
+                )
+
+        with self.checker.step(
+            f"[tab {tab}] Overlay carries Prompt Security / SentinelOne branding (#poweredBy)"
+        ):
+            logger.info(f"[tab {tab}] Verifying overlay branding container")
+            self.checker.check_true(
+                bool(overlay.get("has_branding")),
+                msg=f"{site.name} overlay missing Prompt Security branding container (#poweredBy / .powered-by)",
+            )
+
+        with self.checker.step(
+            f"[tab {tab}] Overlay query: canBypass=Prevent (no per-user override on this policy)"
+        ):
+            logger.info(f"[tab {tab}] Verifying overlay canBypass query")
+            self.checker.check_equal(
+                actual=overlay.get("can_bypass"),
+                expected="Prevent",
+                message=(
+                    f"{site.name} overlay declares unexpected canBypass value "
+                    f"(got {overlay.get('can_bypass')!r})"
+                ),
             )
 
         allure.attach(
