@@ -169,8 +169,8 @@ def _new_narrative() -> list[dict[str, Any]]:
                 _rt("Baseline (3 tests, no extension): "),
                 _rt("ChatGPT · Gemini · Claude AI", bold=True),
                 _rt(
-                    " each load normally in separate tabs — proves blocks observed in the "
-                    "next class are caused by the extension, not the environment."
+                    " each load normally — proves blocks observed in the next class "
+                    "are caused by the extension, not the environment."
                 ),
             ]
         ),

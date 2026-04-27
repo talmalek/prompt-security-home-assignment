@@ -17,7 +17,7 @@ Python 3.12+ automation for the **Prompt Security Browser Extension** GenAI allo
 - Use smart waits (`wait_for`, `expect().to_be_visible()`) instead of fixed `wait_for_timeout` except short documented cases.
 
 ## Tests
-- UI tests: `tests/ui/test_*.py`. Use `@pytest.mark.asyncio(loop_scope="class")` for class-scoped browser fixtures.
+- UI tests: `tests/ui/test_*.py`. Use plain `@pytest.mark.asyncio` (no `loop_scope`) — browser fixtures are function-scoped and `pyproject.toml` already sets `asyncio_default_fixture_loop_scope = "function"`.
 - Markers: `smoke`, `regression`, `ui`, `api` (see `pyproject.toml`).
 - **Hard asserts** for preconditions that block the test. **Soft asserts** via `SoftAssert` for grouped checks; call `assert_all()` before declaring success (or in `teardown_method` if every test uses soft asserts consistently).
 - Wrap logical groups in `with self.checker.step("..."):` or `with allure.step("..."):` for readable reports.

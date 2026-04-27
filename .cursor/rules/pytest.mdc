@@ -5,7 +5,8 @@ globs: tests/**/*.py
 
 # Pytest
 
-- UI tests: `@pytest.mark.asyncio(loop_scope="class")` + `@pytest.mark.usefixtures("browser_context_plain")` (no extension) or `@pytest.mark.usefixtures("browser_context_with_extension")` (extension loaded + popup configured) when using the shared class browser.
+- UI tests: `@pytest.mark.asyncio` + `@pytest.mark.usefixtures("browser_context_plain")` (no extension) or `@pytest.mark.usefixtures("browser_context_with_extension")` (extension loaded + popup configured + policy-activation barrier).
+- Browser fixtures are **function-scoped** — every test launches its own Chromium on a freshly-wiped user-data dir.  Do **not** add `loop_scope="class"`; `pyproject.toml` sets `asyncio_default_fixture_loop_scope = "function"` and mixing scopes silently causes cross-loop hangs.
 - Use markers: `smoke`, `regression`, `ui`, `api`.
 - Allure: `allure.title`, `allure.description`, `allure.step` for reviewer-friendly reports.
 - Soft assertions: instantiate `SoftAssert` in `setup_method` and call `assert_all()` in `teardown_method` or explicitly at end of test.

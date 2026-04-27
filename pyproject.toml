@@ -73,7 +73,10 @@ line-ending = "auto"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "class"
+# Function-scoped event loop matches the function-scoped browser fixtures in
+# ``tests/conftest.py``. Mixing scopes causes silent cross-loop hangs because
+# Playwright resources allocated in one loop cannot be awaited from another.
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = [

@@ -4,7 +4,7 @@ Automation that validates the **Prompt Security Browser Extension** enforces adm
 
 The suite runs **8 test scenarios** across three pytest classes, each backed by its own Playwright fixture:
 
-| Class | Fixture | Tab 1 — ChatGPT | Tab 2 — Gemini | Tab 3 — Claude AI |
+| Class | Fixture | ChatGPT | Gemini | Claude AI |
 |---|---|---|---|---|
 | `TestWithoutExtension` | `browser_context_plain` | ✅ No block | ✅ No block | ✅ No block |
 | `TestWithExtension` | `browser_context_with_extension` | ✅ No block (allow) | 🛑 **BLOCK** overlay | 🛑 **BLOCK** overlay |
@@ -55,17 +55,47 @@ This is done once per CI run (or `make extension` locally).
 All fixtures are backed by a single shared lifecycle helper in `tests/conftest.py`:
 
 ```
-_persistent_context_lifecycle(cls_name, with_extension, api_key_override?)
+_persistent_context_lifecycle(instance_id, with_extension, api_key_override?)
 ```
 
-This helper:
-1. Creates a per-class `reports/.user-data/<cls_name>/` persistent profile directory.
-2. Launches `pw.chromium.launch_persistent_context` — headed, Xvfb in CI.
+The helper is **function-scoped** — every test gets its own freshly-launched browser
+on a wiped user-data directory.  This trades a few seconds of extension-popup
+re-configuration per test for two strong properties:
+
+1. **Cloudflare resilience** — accumulated `__cf_bm` / `cf_clearance` cookies and
+   bot-score reputation cannot leak between tests, so a Cloudflare challenge tripped
+   by one site can't bias the next.  Without this isolation, ChatGPT's Cloudflare
+   "Verify you are human" wall regularly returned mid-suite even after a successful
+   first-test bypass.
+2. **True per-test isolation** — no shared cookies, `localStorage`, or `IndexedDB`.
+
+The lifecycle steps:
+1. Wipes and recreates `reports/.user-data/<instance_id>/` (keyed by pytest `node.name`,
+   so parallel runs cannot collide on the same on-disk profile).
+2. Launches `pw.chromium.launch_persistent_context` — headed, Xvfb in CI — with
+   the Cloudflare bypass layered in (see *Anti-bot mitigations* below).
 3. **If `with_extension=True`:** resolves the runtime `chrome-extension://<id>` from
-   the MV3 service-worker URL (the id differs from the CRX Store id), then opens the
-   extension popup and saves the API domain + key before handing off to the test class.
+   the MV3 service-worker URL (the id differs from the CRX Store id), opens the
+   extension popup and saves the API domain + key, then runs a **policy-activation
+   barrier** that probes a known-blocked site until the extension actually intercepts
+   it.  This eliminates the policy-fetch race that surfaces with per-test fixtures
+   on fast-redirecting targets (e.g. Claude → `/login` in <500 ms).
 4. Starts a Playwright trace (`screenshots=True`, `snapshots=True`, `sources=True`).
-5. On teardown: stops the trace → `reports/traces/<cls_name>.zip`.
+5. On teardown: stops the trace → `reports/traces/<instance_id>.zip`, closes the
+   context.
+
+#### Anti-bot mitigations
+
+ChatGPT and Claude AI both sit behind a Cloudflare Managed Challenge.  Three
+complementary layers keep the suite green:
+
+* **Per-test fresh persistent context** (most impactful) — see scope above.
+* **`--disable-blink-features=AutomationControlled`** — removes the
+  `navigator.webdriver` flag at the browser process level.
+* **`user_agent` override + `add_init_script` patches** — pin the UA to a stable
+  Chrome version and patch the JS surface bot checks read: `navigator.webdriver`,
+  `plugins`, `languages`, `hardwareConcurrency`, `deviceMemory`, the `chrome.runtime`
+  stub, and the Permissions API.
 
 Three fixtures call this helper:
 
@@ -79,14 +109,14 @@ Three fixtures call this helper:
 
 #### Baseline — `TestWithoutExtension`
 
-Three tests, one tab each.  Navigates to ChatGPT / Gemini / Claude AI and asserts
+Three tests, one site each.  Navigates to ChatGPT / Gemini / Claude AI and asserts
 the final URL scheme is `https` (not `chrome-extension://`).  This proves the three
 sites are reachable in a vanilla browser — i.e. any block detected in
 `TestWithExtension` is attributable to the extension, not the environment.
 
 #### Policy enforcement — `TestWithExtension`
 
-Three tests, one tab each, same three sites:
+Three tests, one site each:
 
 * **ChatGPT (allow):** final URL is a normal web origin — extension respects the
   allow rule.
@@ -167,7 +197,7 @@ flowchart TD
     Lifecycle --> WithExt["browser_context_with_extension\n(extension + API key from env)"]
     Lifecycle --> OpenExt["browser_context_with_open_extension\n(extension + open-policy key)"]
 
-    Plain --> T1["TestWithoutExtension\n3 tabs · all ✅ reachable"]
+    Plain --> T1["TestWithoutExtension\n3 sites · all ✅ reachable"]
     WithExt --> T2["TestWithExtension\nchatgpt ✅ · gemini 🛑 · claude 🛑"]
     OpenExt --> T3["TestFailureDemo\ngemini ❌ · claude ❌  (expected failures)"]
 
@@ -275,8 +305,11 @@ To wire a fresh Notion page:
   failures are reported together at teardown.
 - **Intentional failure demo** is isolated in `tests/ui/test_failure_demo.py` with a clean
   removal checklist in the module docstring — nothing else changes when it's deleted.
-- **TAB_OFFSET class variable** on each test class shifts tab numbering in Allure steps,
-  enabling future parallel runs with globally unique tab labels.
+- **Function-scoped browser fixtures** — every test gets its own freshly-launched
+  Chromium and a wiped user-data directory.  See *Browser context fixtures* above for
+  the rationale (Cloudflare resilience, true isolation) and the cost/benefit trade-off.
+- **One site per test** — each test opens its target site in the per-test browser
+  via `self.context.new_page()`; there's no shared context juggling multiple tabs.
 
 ## Risks and assumptions
 

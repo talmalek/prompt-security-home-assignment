@@ -6,8 +6,8 @@
 * **JSON file** (``reports/logs/test-run.jsonl``) — one JSON object per line
   preserving every ``logger.info(..., key=value)`` kwarg under ``record.extra``.
   This is what a log shipper (Promtail/Vector/Datadog Agent) tails into Loki /
-  Grafana, where you can filter by ``extra.app``, ``extra.tab``,
-  ``extra.extension_id``, etc.
+  Grafana, where you can filter by ``extra.app``, ``extra.extension_id``,
+  ``extra.final_url``, etc.
 
 The terminal stays clean; the structured fields stay queryable.
 """

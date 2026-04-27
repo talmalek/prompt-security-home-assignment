@@ -7,8 +7,8 @@ globs: tests/**/*.py
 
 - Use `playwright.async_api` only. Page objects receive `Page` and expose `async` methods.
 - Prefer `expect(locator).to_*` assertions with timeouts over raw `wait_for_timeout`.
-- Two class-scoped fixtures in `tests/conftest.py` expose a Chromium `BrowserContext` via `self.context`:
+- Two **function-scoped** fixtures in `tests/conftest.py` expose a Chromium `BrowserContext` via `self.context` — every test launches its own browser on a wiped user-data dir for Cloudflare resilience and true isolation:
   - `browser_context_plain` — vanilla persistent context, no extension loaded.
-  - `browser_context_with_extension` — persistent context with the unpacked Prompt Security extension loaded (`--load-extension` / `--disable-extensions-except`) and the popup pre-configured (`#apiDomain`, `#apiKey`, `#saveButton`); resolves the runtime `chrome-extension://<id>` from the MV3 service worker URL and exposes it on `self.chrome_extension_id`.
-- Tests open their own tabs via `self.context.new_page()` (one tab per scenario).
+  - `browser_context_with_extension` — persistent context with the unpacked Prompt Security extension loaded (`--load-extension` / `--disable-extensions-except`), the popup pre-configured (`#apiDomain`, `#apiKey`, `#saveButton`), and a **policy-activation barrier** that probes a known-blocked site until the extension intercepts (eliminates the per-test policy-fetch race).  The runtime `chrome-extension://<id>` is resolved from the MV3 service worker URL and exposed on `self.chrome_extension_id`.
+- Each test opens its target site directly via `self.context.new_page()` — one page per test, no narrative tab numbering.
 - On failure, CI and hooks attach screenshots and page source where possible; traces are under `reports/traces/`.
