@@ -24,6 +24,27 @@ window literally contains *tab1 / tab2 / tab3* as required by the assignment.
 The first tab reuses Chromium's startup ``about:blank`` page (a persistent
 context always boots with one) so tab numbering aligns with the visual
 position of the tabs in the window.
+
+Helper organisation
+-------------------
+The two assertion bodies live as **module-level helpers** —
+:func:`_open_in_tab_and_expect_unblocked` and
+:func:`_open_in_tab_and_expect_blocked` — each accepting a test instance
+(``inst``) that exposes ``context`` (the active ``BrowserContext``),
+``checker`` (a :class:`SoftAssert`), an optional ``TAB_OFFSET`` int, and an
+optional ``chrome_extension_id`` string.  Both ``TestWithoutExtension`` and
+``TestWithExtension`` simply forward ``self`` to these helpers, which keeps
+exactly one implementation of each assertion body and leaves the test
+classes as thin orchestration shells.
+
+The unblock helper accepts a ``context`` kwarg (a short human string such
+as ``"no extension installed"`` or ``"allow policy"``) that is woven into
+Allure step labels and failure messages so the diagnostic in the report
+makes the *why* explicit without forking the helper.
+
+For backward compatibility ``run_block_assertion`` is exported as an alias
+of :func:`_open_in_tab_and_expect_blocked` — used by
+:mod:`tests.ui.test_failure_demo` so that file requires no churn.
 """
 
 from __future__ import annotations
@@ -69,6 +90,295 @@ async def _open_tab(context, *, tab_index: int):
         page.set_default_timeout(settings.test.default_timeout_ms)
         page.set_default_navigation_timeout(60_000)
     return page
+
+
+# ---------------------------------------------------------------------------
+# Module-level assertion bodies
+#
+# Both ``TestWithoutExtension`` and ``TestWithExtension`` (and the failure-demo
+# class in ``tests.ui.test_failure_demo``) delegate to these helpers, so the
+# assertion code lives in exactly one place.
+#
+# Each helper takes a test instance (``inst``) and reads:
+#   - inst.context              — the active BrowserContext
+#   - inst.checker              — a SoftAssert instance
+#   - inst.page                 — written by the helper
+#   - inst.chrome_extension_id  — optional; used to verify overlay origin
+#   - inst.TAB_OFFSET           — optional int; defaults to 0
+# ---------------------------------------------------------------------------
+
+
+async def _open_in_tab_and_expect_unblocked(
+    inst,
+    site: GenAiAppSite,
+    *,
+    tab_index: int,
+    context: str = "",
+) -> None:
+    """Open ``site`` in a fresh tab; assert the navigation reached a real web origin.
+
+    Structural assertions (always identical):
+
+    * Final URL scheme is **not** ``chrome-extension`` (the extension did not
+      hijack the navigation).
+    * No block-overlay snapshot was recorded.
+
+    The ``context`` string is interpolated into Allure step labels and failure
+    messages to disambiguate *why* the site is expected to load — e.g.
+    ``"no extension installed"`` (baseline) vs
+    ``"extension installed; ChatGPT is on the allow list"`` (allow policy).
+    It does **not** change the structural assertions, only the diagnostic text.
+    """
+    tab = tab_index + getattr(inst, "TAB_OFFSET", 0)
+    suffix = f" — {context}" if context else ""
+
+    logger.info(
+        f"[tab {tab}] Opening {site.name} - expecting ALLOW (no block){suffix}",
+        site_url=site.url,
+    )
+    page = await _open_tab(inst.context, tab_index=tab)
+    inst.page = page
+
+    with allure.step(f"[tab {tab}] Navigate to {site.name} ({site.url}){suffix}"):
+        logger.info(f"[tab {tab}] Navigating to {site.name} for allow check")
+        wp = WebGenAiAppPage(page, site)
+        await wp.navigate()
+
+    with allure.step(f"[tab {tab}] Capture post-navigation state"):
+        logger.info(f"[tab {tab}] Capturing post-navigation state")
+        snap = await wp.assess_state()
+        _attach_snapshot(snap, name=f"{site.name.replace(' ', '_')}_landing.json")
+
+        logger.info(
+            f"[tab {tab}] {site.name} state assessed",
+            final_url=snap["final_url"],
+            scheme=snap["scheme"],
+        )
+
+    with inst.checker.step(
+        f"[tab {tab}] {site.name}: final scheme is web (https/http), NOT 'chrome-extension'{suffix}"
+    ):
+        logger.info(
+            f"[tab {tab}] Assert {site.name} final scheme is web — "
+            f"expected='NOT chrome-extension', found={snap['scheme']!r}"
+        )
+        inst.checker.check_not_equal(
+            a=snap["scheme"],
+            b="chrome-extension",
+            msg=(
+                f"{site.name} unexpectedly served by an extension at {snap['final_url']!r}; "
+                f"expected a normal web origin{suffix}"
+            ),
+        )
+
+    with inst.checker.step(f"[tab {tab}] {site.name}: no block-overlay snapshot recorded"):
+        overlay_state = "present" if "overlay" in snap else "absent"
+        logger.info(
+            f"[tab {tab}] Assert {site.name} has no overlay snapshot — expected='absent', found={overlay_state!r}"
+        )
+        inst.checker.check_not_in(
+            item="overlay",
+            container=snap,
+            msg=f"{site.name} unexpectedly produced an extension overlay snapshot ({snap.get('overlay')!r})",
+        )
+
+    logger.info(
+        "Site loaded unblocked",
+        app=site.name,
+        tab=tab,
+        final_url=snap["final_url"],
+        context=context or "<no-context>",
+    )
+
+
+async def _open_in_tab_and_expect_blocked(
+    inst,
+    site: GenAiAppSite,
+    *,
+    tab_index: int,
+) -> None:
+    """Open ``site`` in a fresh tab; assert the extension's block overlay rendered.
+
+    Structural assertions:
+
+    * Final URL scheme is ``chrome-extension``.
+    * An ``overlay`` snapshot was recorded by :class:`WebGenAiAppPage`.
+    * Overlay query params: ``type=blockPage``, ``domain=<site.block_domain>``,
+      ``canBypass=Prevent``.
+    * Overlay DOM markers: ``body.ai-site``, non-empty ``.title`` containing
+      *Denied*, ``.description`` mentioning *blocked*, branding container
+      (``#poweredBy`` / ``.powered-by``).
+
+    If ``inst.chrome_extension_id`` is set, additionally asserts the overlay
+    was served by that exact extension id — making cross-test contamination
+    immediately visible in the failure message.
+    """
+    tab = tab_index + getattr(inst, "TAB_OFFSET", 0)
+    logger.info(f"[tab {tab}] Opening {site.name} - expecting BLOCK policy", site_url=site.url)
+    page = await _open_tab(inst.context, tab_index=tab)
+    inst.page = page
+
+    with allure.step(f"[tab {tab}] Navigate to {site.name} ({site.url}) — expecting BLOCK policy"):
+        logger.info(f"[tab {tab}] Navigating to {site.name} for block check")
+        wp = WebGenAiAppPage(page, site)
+        await wp.navigate()
+
+    with allure.step(f"[tab {tab}] Wait for the extension's pageOverlay.html to settle"):
+        logger.info(f"[tab {tab}] Waiting for extension overlay to settle")
+        snap = await wp.assess_state(settle_seconds=2.0)
+        _attach_snapshot(snap, name=f"{site.name.replace(' ', '_')}_landing.json")
+
+        logger.info(
+            f"[tab {tab}] {site.name} state assessed",
+            final_url=snap["final_url"],
+            is_blocked=(snap["scheme"] == "chrome-extension"),
+        )
+
+    with inst.checker.step(f"[tab {tab}] Final URL scheme is 'chrome-extension'"):
+        logger.info(f"[tab {tab}] Assert final URL scheme — expected='chrome-extension', found={snap['scheme']!r}")
+        inst.checker.check_equal(
+            actual=snap["scheme"],
+            expected="chrome-extension",
+            message=(
+                f"{site.name} block expected: final URL should be served by the extension, got {snap['final_url']!r}"
+            ),
+        )
+
+    with inst.checker.step(f"[tab {tab}] Final URL is the extension's pageOverlay.html (block snapshot recorded)"):
+        overlay_state = "present" if "overlay" in snap else "absent"
+        logger.info(f"[tab {tab}] Assert overlay snapshot recorded — expected='present', found={overlay_state!r}")
+        inst.checker.check_in(
+            item="overlay",
+            container=snap,
+            msg=(f"{site.name} did not land on a recognised pageOverlay.html (final URL was {snap['final_url']!r})"),
+        )
+
+    overlay = snap.get("overlay")
+    if overlay is None:
+        return
+
+    with inst.checker.step(f"[tab {tab}] Overlay query: type=blockPage"):
+        logger.info(f"[tab {tab}] Assert overlay query type — expected='blockPage', found={overlay.get('type')!r}")
+        inst.checker.check_equal(
+            actual=overlay.get("type"),
+            expected="blockPage",
+            message=f"{site.name} overlay declares unexpected type {overlay.get('type')!r}",
+        )
+
+    with inst.checker.step(f"[tab {tab}] Overlay query: domain={site.block_domain}"):
+        logger.info(
+            f"[tab {tab}] Assert overlay query domain — expected={site.block_domain!r}, found={overlay.get('domain')!r}"
+        )
+        inst.checker.check_equal(
+            actual=overlay.get("domain"),
+            expected=site.block_domain,
+            message=(
+                f"{site.name} overlay declares wrong blocked domain "
+                f"(expected {site.block_domain!r}, got {overlay.get('domain')!r})"
+            ),
+        )
+
+    ext_id = getattr(inst, "chrome_extension_id", None)
+    if ext_id:
+        with inst.checker.step(f"[tab {tab}] Overlay served by the loaded extension id ({ext_id})"):
+            logger.info(
+                f"[tab {tab}] Assert overlay extension id — expected={ext_id!r}, found={overlay.get('extension_id')!r}"
+            )
+            inst.checker.check_equal(
+                actual=overlay.get("extension_id"),
+                expected=ext_id,
+                message=(
+                    f"{site.name} overlay served by an unexpected extension id "
+                    f"(expected {ext_id!r}, got {overlay.get('extension_id')!r})"
+                ),
+            )
+
+    with inst.checker.step(f"[tab {tab}] Overlay body has block-page class marker (body.ai-site)"):
+        body_class = overlay.get("body_class") or ""
+        logger.info(
+            f"[tab {tab}] Assert body class contains block marker — "
+            f"expected=\"'ai-site' in body.class\", found={body_class!r}"
+        )
+        inst.checker.check_in(
+            item="ai-site",
+            container=body_class,
+            msg=f"{site.name} overlay body missing 'ai-site' class (got body.class={body_class!r})",
+        )
+
+    with inst.checker.step(f"[tab {tab}] Overlay shows 'Access Denied' title (.title)"):
+        title = (overlay.get("title_text") or "").strip()
+        logger.info(
+            f"[tab {tab}] Assert overlay title contains 'Denied' — "
+            f"expected=\"non-empty .title containing 'Denied'\", found={title!r}"
+        )
+        inst.checker.check_true(
+            bool(title),
+            msg=f"{site.name} overlay missing .title element / text in DOM",
+        )
+        if title:
+            inst.checker.check_in(
+                item="Denied",
+                container=title,
+                msg=f"{site.name} overlay title is not 'Access Denied' (got {title!r})",
+            )
+
+    with inst.checker.step(f"[tab {tab}] Overlay description states the administrator blocked access (.description)"):
+        description = (overlay.get("description") or "").strip()
+        logger.info(
+            f"[tab {tab}] Assert overlay description mentions 'blocked' — "
+            f"expected=\"non-empty .description containing 'blocked'\", found={description!r}"
+        )
+        inst.checker.check_true(
+            bool(description),
+            msg=f"{site.name} overlay missing .description element / text in DOM",
+        )
+        if description:
+            inst.checker.check_in(
+                item="blocked",
+                container=description.lower(),
+                msg=(f"{site.name} overlay description does not mention administrator block (got {description!r})"),
+            )
+
+    with inst.checker.step(f"[tab {tab}] Overlay carries Prompt Security / SentinelOne branding (#poweredBy)"):
+        branding_state = "present" if overlay.get("has_branding") else "absent"
+        logger.info(
+            f"[tab {tab}] Assert overlay branding container — "
+            f'expected="#poweredBy / .powered-by present", found={branding_state!r}'
+        )
+        inst.checker.check_true(
+            bool(overlay.get("has_branding")),
+            msg=f"{site.name} overlay missing Prompt Security branding container (#poweredBy / .powered-by)",
+        )
+
+    with inst.checker.step(f"[tab {tab}] Overlay query: canBypass=Prevent (no per-user override on this policy)"):
+        logger.info(
+            f"[tab {tab}] Assert overlay query canBypass — expected='Prevent', found={overlay.get('can_bypass')!r}"
+        )
+        inst.checker.check_equal(
+            actual=overlay.get("can_bypass"),
+            expected="Prevent",
+            message=(f"{site.name} overlay declares unexpected canBypass value (got {overlay.get('can_bypass')!r})"),
+        )
+
+    allure.attach(
+        body=" | ".join(f"{k}={v}" for k, v in overlay.items()),
+        name=f"{site.name.replace(' ', '_')}_block_evidence",
+        attachment_type=allure.attachment_type.TEXT,
+    )
+    logger.info(
+        "Site blocked by extension policy",
+        app=site.name,
+        tab=tab,
+        extension_id=overlay.get("extension_id"),
+        domain=overlay.get("domain"),
+        type=overlay.get("type"),
+    )
+
+
+# Backward-compatible alias used by tests.ui.test_failure_demo.  Kept as a
+# plain alias (no wrapper function) so there is exactly one callable to
+# maintain — same docstring, same signature, same behaviour.
+run_block_assertion = _open_in_tab_and_expect_blocked
 
 
 @allure.epic("Prompt Security")
@@ -124,7 +434,12 @@ class TestWithoutExtension:
         4. Assert final URL scheme is https/http, NOT chrome-extension (no block overlay)
         5. Assert no block-overlay snapshot was recorded
         """
-        await self._open_in_tab_and_expect_unblocked(CHATGPT, tab_index=1)
+        await _open_in_tab_and_expect_unblocked(
+            self,
+            CHATGPT,
+            tab_index=1,
+            context="no extension installed in this fixture",
+        )
 
     @allure.title("Without extension — Gemini loads in tab 2 (Result: No Block)")
     @allure.description(
@@ -144,7 +459,12 @@ class TestWithoutExtension:
         4. Assert final URL scheme is https/http, NOT chrome-extension (no block overlay)
         5. Assert no block-overlay snapshot was recorded
         """
-        await self._open_in_tab_and_expect_unblocked(GEMINI, tab_index=2)
+        await _open_in_tab_and_expect_unblocked(
+            self,
+            GEMINI,
+            tab_index=2,
+            context="no extension installed in this fixture",
+        )
 
     @allure.title("Without extension — Claude AI loads in tab 3 (Result: No Block)")
     @allure.description(
@@ -163,60 +483,11 @@ class TestWithoutExtension:
         4. Assert final URL scheme is https/http, NOT chrome-extension (no block overlay)
         5. Assert no block-overlay snapshot was recorded
         """
-        await self._open_in_tab_and_expect_unblocked(CLAUDE, tab_index=3)
-
-    async def _open_in_tab_and_expect_unblocked(self, site: GenAiAppSite, *, tab_index: int) -> None:
-        tab = tab_index + self.TAB_OFFSET
-        logger.info(f"[tab {tab}] Opening {site.name} - expecting ALLOW policy", site_url=site.url)
-        page = await _open_tab(self.context, tab_index=tab)
-        self.page = page
-
-        with allure.step(f"[tab {tab}] Navigate to {site.name} ({site.url})"):
-            logger.info(f"[tab {tab}] Navigating to {site.name}")
-            wp = WebGenAiAppPage(page, site)
-            await wp.navigate()
-
-        with allure.step(f"[tab {tab}] Capture post-navigation state"):
-            logger.info(f"[tab {tab}] Capturing post-navigation state")
-            snap = await wp.assess_state()
-            _attach_snapshot(snap, name=f"{site.name.replace(' ', '_')}_landing.json")
-
-            logger.info(
-                f"[tab {tab}] {site.name} state assessed",
-                final_url=snap["final_url"],
-                scheme=snap["scheme"],
-            )
-
-        with self.checker.step(f"[tab {tab}] {site.name}: final scheme is web (https/http), NOT 'chrome-extension'"):
-            logger.info(
-                f"[tab {tab}] Assert {site.name} final scheme is web — "
-                f"expected='NOT chrome-extension', found={snap['scheme']!r}"
-            )
-            self.checker.check_not_equal(
-                a=snap["scheme"],
-                b="chrome-extension",
-                msg=(
-                    f"{site.name} unexpectedly served by an extension at {snap['final_url']!r}; "
-                    "expected a normal web origin since no extension is installed in this fixture"
-                ),
-            )
-
-        with self.checker.step(f"[tab {tab}] {site.name}: no block-overlay snapshot recorded"):
-            overlay_state = "present" if "overlay" in snap else "absent"
-            logger.info(
-                f"[tab {tab}] Assert {site.name} has no overlay snapshot — expected='absent', found={overlay_state!r}"
-            )
-            self.checker.check_not_in(
-                item="overlay",
-                container=snap,
-                msg=f"{site.name} produced an extension overlay snapshot ({snap.get('overlay')!r})",
-            )
-
-        logger.info(
-            "Site loaded unblocked (no extension)",
-            app=site.name,
-            tab=tab,
-            final_url=snap["final_url"],
+        await _open_in_tab_and_expect_unblocked(
+            self,
+            CLAUDE,
+            tab_index=3,
+            context="no extension installed in this fixture",
         )
 
 
@@ -266,7 +537,12 @@ class TestWithExtension:
         4. Assert final URL scheme is https/http (NOT the extension block overlay)
         5. Assert no block-overlay snapshot was recorded
         """
-        await self._open_in_tab_and_expect_unblocked(CHATGPT, tab_index=1)
+        await _open_in_tab_and_expect_unblocked(
+            self,
+            CHATGPT,
+            tab_index=1,
+            context="extension installed; ChatGPT is on the allow list",
+        )
 
     @allure.title("With extension — Gemini blocked in tab 2 (Result: Block — Access Denied overlay)")
     @allure.description(
@@ -280,7 +556,7 @@ class TestWithExtension:
         "2. The overlay was served by the **same** extension id resolved by the fixture (`self.chrome_extension_id`).\n"
         "3. Query parameter `type=blockPage`.\n"
         "4. Query parameter `domain=gemini.google.com`.\n"
-        "5. DOM markers `Access Denied` (`#title-text`) and the `Powered by: prompt.security` footer link "
+        "5. DOM markers `Access Denied` (`.title`) and the `Powered by: prompt.security` footer link "
         "are present (best-effort; recorded as Allure detail).\n\n"
         "Failing on parsed query params (vs. fragile DOM heuristics) makes the error message itself the diagnosis."
     )
@@ -295,9 +571,9 @@ class TestWithExtension:
         5. Assert overlay served by the resolved runtime extension id (self.chrome_extension_id)
         6. Assert query param type=blockPage
         7. Assert query param domain=gemini.google.com
-        8. Assert DOM markers: #title-text contains "Denied", Powered by: prompt.security link
+        8. Assert DOM markers: .title contains "Denied", Powered by: prompt.security link
         """
-        await self._open_in_tab_and_expect_blocked(GEMINI, tab_index=2)
+        await _open_in_tab_and_expect_blocked(self, GEMINI, tab_index=2)
 
     @allure.title("With extension — Claude AI blocked in tab 3 (Result: Block — Access Denied overlay)")
     @allure.description(
@@ -320,246 +596,6 @@ class TestWithExtension:
         5. Assert overlay served by the resolved runtime extension id (self.chrome_extension_id)
         6. Assert query param type=blockPage
         7. Assert query param domain=claude.ai
-        8. Assert DOM markers: #title-text contains "Denied", Powered by: prompt.security link
+        8. Assert DOM markers: .title contains "Denied", Powered by: prompt.security link
         """
-        await self._open_in_tab_and_expect_blocked(CLAUDE, tab_index=3)
-
-    async def _open_in_tab_and_expect_unblocked(self, site: GenAiAppSite, *, tab_index: int) -> None:
-        tab = tab_index + self.TAB_OFFSET
-        page = await _open_tab(self.context, tab_index=tab)
-        self.page = page
-
-        with allure.step(f"[tab {tab}] Navigate to {site.name} ({site.url}) — expecting allow policy"):
-            logger.info(f"[tab {tab}] Navigating to {site.name} for allow check")
-            wp = WebGenAiAppPage(page, site)
-            await wp.navigate()
-
-        with allure.step(f"[tab {tab}] Capture post-navigation state"):
-            logger.info(f"[tab {tab}] Capturing post-navigation state")
-            snap = await wp.assess_state()
-            _attach_snapshot(snap, name=f"{site.name.replace(' ', '_')}_landing.json")
-
-        with self.checker.step(
-            f"[tab {tab}] {site.name}: ALLOW policy → final URL is a real web origin, not the extension overlay"
-        ):
-            logger.info(
-                f"[tab {tab}] Assert {site.name} ALLOW policy — final scheme is web — "
-                f"expected='NOT chrome-extension', found={snap['scheme']!r}"
-            )
-            self.checker.check_not_equal(
-                a=snap["scheme"],
-                b="chrome-extension",
-                msg=(
-                    f"{site.name} should be allowed by policy but the extension overlay was shown at "
-                    f"{snap['final_url']!r}; expected a normal web origin"
-                ),
-            )
-
-        with self.checker.step(f"[tab {tab}] {site.name}: no block-overlay snapshot recorded"):
-            overlay_state = "present" if "overlay" in snap else "absent"
-            logger.info(
-                f"[tab {tab}] Assert {site.name} has no overlay snapshot — expected='absent', found={overlay_state!r}"
-            )
-            self.checker.check_not_in(
-                item="overlay",
-                container=snap,
-                msg=f"{site.name} unexpectedly produced an extension overlay snapshot ({snap.get('overlay')!r})",
-            )
-
-        logger.info(
-            "Allowed site loaded with extension installed",
-            app=site.name,
-            tab=tab,
-            final_url=snap["final_url"],
-        )
-
-    async def _open_in_tab_and_expect_blocked(self, site: GenAiAppSite, *, tab_index: int) -> None:
-        tab = tab_index + self.TAB_OFFSET
-        logger.info(f"[tab {tab}] Opening {site.name} - expecting BLOCK policy", site_url=site.url)
-        page = await _open_tab(self.context, tab_index=tab)
-        self.page = page
-
-        with allure.step(f"[tab {tab}] Navigate to {site.name} ({site.url}) — expecting BLOCK policy"):
-            logger.info(f"[tab {tab}] Navigating to {site.name} for block check")
-            wp = WebGenAiAppPage(page, site)
-            await wp.navigate()
-
-        with allure.step(f"[tab {tab}] Wait for the extension's pageOverlay.html to settle"):
-            logger.info(f"[tab {tab}] Waiting for extension overlay to settle")
-            snap = await wp.assess_state(settle_seconds=2.0)
-            _attach_snapshot(snap, name=f"{site.name.replace(' ', '_')}_landing.json")
-
-            logger.info(
-                f"[tab {tab}] {site.name} state assessed",
-                final_url=snap["final_url"],
-                is_blocked=(snap["scheme"] == "chrome-extension"),
-            )
-
-        with self.checker.step(f"[tab {tab}] Final URL scheme is 'chrome-extension'"):
-            logger.info(f"[tab {tab}] Assert final URL scheme — expected='chrome-extension', found={snap['scheme']!r}")
-            self.checker.check_equal(
-                actual=snap["scheme"],
-                expected="chrome-extension",
-                message=(
-                    f"{site.name} block expected: final URL should be served by the extension, "
-                    f"got {snap['final_url']!r}"
-                ),
-            )
-
-        with self.checker.step(f"[tab {tab}] Final URL is the extension's pageOverlay.html (block snapshot recorded)"):
-            overlay_state = "present" if "overlay" in snap else "absent"
-            logger.info(f"[tab {tab}] Assert overlay snapshot recorded — expected='present', found={overlay_state!r}")
-            self.checker.check_in(
-                item="overlay",
-                container=snap,
-                msg=(
-                    f"{site.name} did not land on a recognised pageOverlay.html (final URL was {snap['final_url']!r})"
-                ),
-            )
-
-        overlay = snap.get("overlay")
-        if overlay is None:
-            return
-
-        with self.checker.step(f"[tab {tab}] Overlay query: type=blockPage"):
-            logger.info(f"[tab {tab}] Assert overlay query type — expected='blockPage', found={overlay.get('type')!r}")
-            self.checker.check_equal(
-                actual=overlay.get("type"),
-                expected="blockPage",
-                message=f"{site.name} overlay declares unexpected type {overlay.get('type')!r}",
-            )
-
-        with self.checker.step(f"[tab {tab}] Overlay query: domain={site.block_domain}"):
-            logger.info(
-                f"[tab {tab}] Assert overlay query domain — "
-                f"expected={site.block_domain!r}, found={overlay.get('domain')!r}"
-            )
-            self.checker.check_equal(
-                actual=overlay.get("domain"),
-                expected=site.block_domain,
-                message=(
-                    f"{site.name} overlay declares wrong blocked domain "
-                    f"(expected {site.block_domain!r}, got {overlay.get('domain')!r})"
-                ),
-            )
-
-        ext_id = getattr(self, "chrome_extension_id", None)
-        if ext_id:
-            with self.checker.step(f"[tab {tab}] Overlay served by the loaded extension id ({ext_id})"):
-                logger.info(
-                    f"[tab {tab}] Assert overlay extension id — "
-                    f"expected={ext_id!r}, found={overlay.get('extension_id')!r}"
-                )
-                self.checker.check_equal(
-                    actual=overlay.get("extension_id"),
-                    expected=ext_id,
-                    message=(
-                        f"{site.name} overlay served by an unexpected extension id "
-                        f"(expected {ext_id!r}, got {overlay.get('extension_id')!r})"
-                    ),
-                )
-
-        with self.checker.step(f"[tab {tab}] Overlay body has block-page class marker (body.ai-site)"):
-            body_class = overlay.get("body_class") or ""
-            logger.info(
-                f"[tab {tab}] Assert body class contains block marker — "
-                f"expected=\"'ai-site' in body.class\", found={body_class!r}"
-            )
-            self.checker.check_in(
-                item="ai-site",
-                container=body_class,
-                msg=f"{site.name} overlay body missing 'ai-site' class (got body.class={body_class!r})",
-            )
-
-        with self.checker.step(f"[tab {tab}] Overlay shows 'Access Denied' title (.title)"):
-            title = (overlay.get("title_text") or "").strip()
-            logger.info(
-                f"[tab {tab}] Assert overlay title contains 'Denied' — "
-                f"expected=\"non-empty .title containing 'Denied'\", found={title!r}"
-            )
-            self.checker.check_true(
-                bool(title),
-                msg=f"{site.name} overlay missing .title element / text in DOM",
-            )
-            if title:
-                self.checker.check_in(
-                    item="Denied",
-                    container=title,
-                    msg=f"{site.name} overlay title is not 'Access Denied' (got {title!r})",
-                )
-
-        with self.checker.step(
-            f"[tab {tab}] Overlay description states the administrator blocked access (.description)"
-        ):
-            description = (overlay.get("description") or "").strip()
-            logger.info(
-                f"[tab {tab}] Assert overlay description mentions 'blocked' — "
-                f"expected=\"non-empty .description containing 'blocked'\", found={description!r}"
-            )
-            self.checker.check_true(
-                bool(description),
-                msg=f"{site.name} overlay missing .description element / text in DOM",
-            )
-            if description:
-                self.checker.check_in(
-                    item="blocked",
-                    container=description.lower(),
-                    msg=(f"{site.name} overlay description does not mention administrator block (got {description!r})"),
-                )
-
-        with self.checker.step(f"[tab {tab}] Overlay carries Prompt Security / SentinelOne branding (#poweredBy)"):
-            branding_state = "present" if overlay.get("has_branding") else "absent"
-            logger.info(
-                f"[tab {tab}] Assert overlay branding container — "
-                f'expected="#poweredBy / .powered-by present", found={branding_state!r}'
-            )
-            self.checker.check_true(
-                bool(overlay.get("has_branding")),
-                msg=f"{site.name} overlay missing Prompt Security branding container (#poweredBy / .powered-by)",
-            )
-
-        with self.checker.step(f"[tab {tab}] Overlay query: canBypass=Prevent (no per-user override on this policy)"):
-            logger.info(
-                f"[tab {tab}] Assert overlay query canBypass — expected='Prevent', found={overlay.get('can_bypass')!r}"
-            )
-            self.checker.check_equal(
-                actual=overlay.get("can_bypass"),
-                expected="Prevent",
-                message=(
-                    f"{site.name} overlay declares unexpected canBypass value (got {overlay.get('can_bypass')!r})"
-                ),
-            )
-
-        allure.attach(
-            body=" | ".join(f"{k}={v}" for k, v in overlay.items()),
-            name=f"{site.name.replace(' ', '_')}_block_evidence",
-            attachment_type=allure.attachment_type.TEXT,
-        )
-        logger.info(
-            "Site blocked by extension policy",
-            app=site.name,
-            tab=tab,
-            extension_id=overlay.get("extension_id"),
-            domain=overlay.get("domain"),
-            type=overlay.get("type"),
-        )
-
-
-async def run_block_assertion(inst: object, site: GenAiAppSite, *, tab_index: int) -> None:
-    """Module-level entry point for the block-assertion logic.
-
-    Delegates to ``TestWithExtension._open_in_tab_and_expect_blocked`` so there
-    is exactly **one** implementation of the assertion, but avoids the pytest
-    fixture-marker inheritance problem that arises when another test class
-    inherits from ``TestWithExtension`` directly (pytest accumulates all
-    ``usefixtures`` markers across the MRO, which would launch two browser
-    contexts for the same user-data directory).
-
-    The caller must supply a test instance (``inst``) that has:
-    - ``inst.context`` — the active ``BrowserContext``
-    - ``inst.checker`` — a ``SoftAssert`` instance
-    - ``inst.page`` — writable (set by this helper)
-    - ``inst.chrome_extension_id`` — optional; used to verify overlay origin
-    - ``inst.TAB_OFFSET`` — optional int; defaults to ``0``
-    """
-    await TestWithExtension._open_in_tab_and_expect_blocked(inst, site, tab_index=tab_index)  # type: ignore[arg-type]
+        await _open_in_tab_and_expect_blocked(self, CLAUDE, tab_index=3)

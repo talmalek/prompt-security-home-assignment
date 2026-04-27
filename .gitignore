@@ -33,6 +33,8 @@ extension/
 
 # Persistent Chromium profile for extension tests
 reports/.user-data/
+reports/.probe-user-data/
+reports/cf-probe/
 
 # Reports & artifacts (generated on each test run; keep dirs via .gitkeep)
 reports/report.html
