@@ -158,20 +158,21 @@ async def _persistent_context_lifecycle(
     api_key: SecretStr | None = None
 
     if with_extension:
-        from scripts.fetch_extension import fetch_and_unpack
-
         api_key = api_key_override if api_key_override is not None else settings.extension.api_key
         if api_key is None:
             pytest.fail(
                 "PROMPT_SECURITY_API_KEY is required for with-extension tests. "
                 "Set it in `.env` (see `.env.example`) or as the GitHub secret `PROMPT_SECURITY_API_KEY`."
             )
+        # ``_ensure_latest_extension`` (session-scoped autouse) has already
+        # force-refreshed ``extension/`` to the current Chrome Web Store version
+        # before any test ran, so we just consume it here without re-fetching.
         ext_dir = settings.extension.resolved_extension_dir()
         if not (ext_dir / "manifest.json").is_file():
-            fetch_and_unpack(
-                extension_id=settings.extension.chrome_store_extension_id,
-                dest_dir=ext_dir,
-                force=False,
+            pytest.fail(
+                f"Extension directory {ext_dir} is missing manifest.json. "
+                "The session-scoped `_ensure_latest_extension` fixture should have "
+                "downloaded it; check the test session log for fetch errors."
             )
         abs_ext = str(ext_dir.resolve())
         launch_args = [f"--disable-extensions-except={abs_ext}", f"--load-extension={abs_ext}"]
@@ -358,6 +359,63 @@ def _resolve_failure_page(item: pytest.Item):
 @pytest.fixture(scope="session", autouse=True)
 def _report_dirs() -> None:
     _ensure_report_dirs()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_latest_extension() -> None:
+    """Force-refresh ``extension/`` to the current Chrome Web Store version, once per session.
+
+    Both local and CI runs MUST exercise the latest released extension — anything
+    less risks shipping a green build that no longer represents what users have
+    installed.  This fixture guarantees parity by:
+
+    1. Calling ``scripts.fetch_extension.fetch_and_unpack(force=True)`` once at
+       session start.  The previous on-disk copy (if any) is wiped first, so a
+       cached older version cannot leak into the run.
+    2. Logging the resolved manifest version, so failures can be triaged against
+       a specific extension release in CI logs and Notion run rows.
+
+    Function-scoped browser fixtures then consume the freshly-unpacked
+    ``extension/`` directly — no per-test re-download.
+
+    The fetch is best-effort: if the Chrome Web Store is unreachable (rare, but
+    e.g. transient DNS / 503), and a previous unpack already exists on disk, we
+    log a warning and continue with the older copy rather than abort the entire
+    session.  CI runners are ephemeral so they always download fresh.
+    """
+    from scripts.fetch_extension import fetch_and_unpack
+
+    ext_dir = settings.extension.resolved_extension_dir()
+    try:
+        fetch_and_unpack(
+            extension_id=settings.extension.chrome_store_extension_id,
+            dest_dir=ext_dir,
+            force=True,
+        )
+    except Exception as exc:
+        if (ext_dir / "manifest.json").is_file():
+            logger.warning(
+                "Could not refresh extension from Chrome Web Store; falling back to existing on-disk copy",
+                error=str(exc).splitlines()[0][:200],
+                extension_dir=str(ext_dir),
+            )
+        else:
+            raise
+
+    # Log version for traceability — pinned in Allure metadata via pytest_summary.
+    try:
+        manifest = (ext_dir / "manifest.json").read_text(encoding="utf-8")
+        import json as _json
+
+        m = _json.loads(manifest)
+        logger.info(
+            "Prompt Security extension ready (latest pulled this session)",
+            name=m.get("name"),
+            version=m.get("version"),
+            extension_dir=str(ext_dir),
+        )
+    except Exception:
+        logger.warning("Could not read extension manifest after fetch", exc_info=True)
 
 
 @pytest.hookimpl(hookwrapper=True)

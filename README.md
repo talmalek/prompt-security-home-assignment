@@ -30,22 +30,32 @@ unpacked directory is referenced by two Chromium launch flags:
 --disable-extensions-except=<abs-path>
 ```
 
-This is done once per CI run (or `make extension` locally).
+This happens automatically **once per pytest session, on every run**, both
+locally and in CI.  The mechanism lives in
+`tests/conftest.py::_ensure_latest_extension` — a session-scoped autouse fixture
+that calls `fetch_and_unpack(force=True)` before any test boots a browser, wipes
+the previous on-disk copy, and logs the resolved manifest version for
+traceability.
 
-> **Always testing the latest release.**
+> **Always testing the latest release — local and CI alike.**
 > The download hits Google's own auto-update endpoint
 > (`clients2.google.com/service/update2/crx`) — the same URL Chrome uses for
 > extension updates — which always redirects to the **currently published CRX**.
-> Because `extension/` is git-ignored and never cached in CI, every workflow run
-> fetches a fresh copy automatically.  This means the test suite continuously
-> validates whatever version is live in the Chrome Web Store, catching regressions
-> introduced by new extension releases without any manual version pinning.
+> Because the autouse fixture force-refreshes on every pytest session, both
+> environments are guaranteed to exercise the same, up-to-the-minute extension
+> version.  No more "works on my machine" caused by a stale local
+> `extension/` folder vs. CI's ephemeral runner pulling fresh.
 >
-> **Local development behaviour.**
-> Locally, the script skips the download if `extension/manifest.json` already
-> exists.  This is intentional — it lets you write and debug tests against a
-> known-good extension version without an unexpected mid-session update changing
-> behaviour.  To pull the latest release explicitly, run:
+> The CI workflow also runs `python scripts/fetch_extension.py --force` as a
+> dedicated step *before* pytest.  This is intentional belt-and-suspenders: a
+> Chrome Web Store outage fails CI with a clear, dedicated step rather than
+> being buried inside the pytest output.  If the dedicated step fails but the
+> on-disk copy from a previous run exists locally, the autouse fixture logs a
+> warning and continues with the cached version (CI runners are always
+> ephemeral, so there is never a stale cache there).
+>
+> If you need to pre-fetch outside of pytest (e.g. to inspect the CRX, or work
+> offline after the initial pull), run:
 > ```bash
 > make extension   # equivalent to: uv run python scripts/fetch_extension.py --force
 > ```

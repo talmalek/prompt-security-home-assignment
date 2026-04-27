@@ -36,8 +36,13 @@ jobs:
       - name: Install Playwright Chromium
         run: uv run playwright install --with-deps chromium
 
-      - name: Fetch + unpack Prompt Security extension
-        run: uv run python scripts/fetch_extension.py
+      # Pre-fetch the extension so a Chrome Web Store / network outage fails
+      # the workflow here (clear failure signal) instead of inside pytest.
+      # ``--force`` mirrors the session-scoped autouse fixture in
+      # ``tests/conftest.py::_ensure_latest_extension`` so CI runs are guaranteed
+      # to test the *currently published* extension version on every workflow.
+      - name: Fetch + unpack Prompt Security extension (latest)
+        run: uv run python scripts/fetch_extension.py --force
 
       - name: Install Xvfb
         run: sudo apt-get update && sudo apt-get install -y xvfb

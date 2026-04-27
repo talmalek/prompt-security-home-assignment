@@ -188,18 +188,33 @@ async def _open_and_expect_blocked(
 ) -> None:
     """Open ``site`` in a fresh page; assert the extension's block overlay rendered.
 
-    Structural assertions:
+    The contract here describes the **v7.1.0+ backend-rendered overlay** —
+    the only version the suite supports, since ``_ensure_latest_extension``
+    in :mod:`tests.conftest` force-refreshes ``extension/`` to the currently
+    published Chrome Web Store CRX on every pytest session.
+
+    Structural assertions (URL contract):
 
     * Final URL scheme is ``chrome-extension``.
     * An ``overlay`` snapshot was recorded by :class:`WebGenAiAppPage`.
     * Overlay query params: ``type=blockPage``, ``domain=<site.block_domain>``,
-      ``canBypass=Prevent``.
-    * Overlay DOM markers (after the bundle hydrates the static
-      ``pageOverlay.html`` template):
+      ``canBypass=Prevent``, ``useBackendHtml=true``, and a non-empty
+      ``popupToken`` (the latest tenant always issues one — its presence is
+      what triggers backend HTML rendering instead of the legacy static
+      template).
 
-      * non-empty ``.title-text`` containing *Denied*,
-      * ``.message-title`` mentioning *blocked*,
-      * ``.powered-by`` branding container present.
+    Visual assertions (DOM contract on the rendered overlay):
+
+    * ``body`` carries the ``ai-site`` class — the unambiguous marker of the
+      v7.1.0 backend-rendered overlay; if it's missing the extension served
+      a different / older UI and this whole block of assertions is invalid.
+    * ``h1.title`` text contains *Denied* (the *Access Denied* headline).
+    * ``p.description`` text mentions *administrator* and *blocked* (the
+      reason copy).
+    * ``p.guidelines`` is present and mentions *guidelines* or *information*
+      (the policy hint copy).
+    * ``.barrier-illustration`` is present (the roadblock SVG).
+    * ``.powered-by`` is present (Prompt Security branding container).
 
     If ``inst.chrome_extension_id`` is set, additionally asserts the overlay
     was served by that exact extension id — making cross-test contamination
@@ -284,39 +299,125 @@ async def _open_and_expect_blocked(
                 ),
             )
 
-    with inst.checker.step(f"{site.name}: overlay shows 'Access Denied' title (.title-text)"):
-        title = (overlay.get("title_text") or "").strip()
+    with inst.checker.step(f"{site.name}: overlay query canBypass=Prevent (no per-user override on this policy)"):
+        logger.info(
+            f"Assert {site.name} overlay query canBypass — expected='Prevent', found={overlay.get('can_bypass')!r}"
+        )
+        inst.checker.check_equal(
+            actual=overlay.get("can_bypass"),
+            expected="Prevent",
+            message=(f"{site.name} overlay declares unexpected canBypass value (got {overlay.get('can_bypass')!r})"),
+        )
+
+    with inst.checker.step(f"{site.name}: overlay rendered via backend HTML (useBackendHtml=true + popupToken)"):
+        backend_flag = (overlay.get("use_backend_html") or "").lower()
+        token_present = bool(overlay.get("popup_token_present"))
+        logger.info(
+            f"Assert {site.name} overlay uses backend HTML — "
+            f"expected='useBackendHtml=true & popupToken=<set>', "
+            f"found=useBackendHtml={backend_flag!r}, popupToken_present={token_present!r}"
+        )
+        inst.checker.check_equal(
+            actual=backend_flag,
+            expected="true",
+            message=(
+                f"{site.name} overlay URL did not request backend HTML rendering "
+                f"(expected useBackendHtml=true, got {overlay.get('use_backend_html')!r}); "
+                "the latest extension should always set this flag."
+            ),
+        )
+        inst.checker.check_true(
+            token_present,
+            msg=(
+                f"{site.name} overlay URL is missing popupToken; the latest extension "
+                "should always issue one when fetching backend-rendered overlay HTML."
+            ),
+        )
+
+    with inst.checker.step(f"{site.name}: overlay body has the v7.1.0 marker class 'ai-site'"):
+        body_class = (overlay.get("body_class") or "").strip()
+        logger.info(f"Assert {site.name} overlay body class — expected=\"contains 'ai-site'\", found={body_class!r}")
+        inst.checker.check_in(
+            item="ai-site",
+            container=body_class,
+            msg=(
+                f"{site.name} overlay body class does not contain 'ai-site' "
+                f"(got {body_class!r}); expected the v7.1.0 backend-rendered overlay."
+            ),
+        )
+
+    with inst.checker.step(f"{site.name}: overlay shows 'Access Denied' headline (h1.title)"):
+        title = (overlay.get("title") or "").strip()
         logger.info(
             f"Assert {site.name} overlay title contains 'Denied' — "
-            f"expected=\"non-empty .title-text containing 'Denied'\", found={title!r}"
+            f"expected=\"non-empty h1.title containing 'Denied'\", found={title!r}"
         )
         inst.checker.check_true(
             bool(title),
-            msg=f"{site.name} overlay missing .title-text element / text in DOM",
+            msg=f"{site.name} overlay missing h1.title element / text in DOM",
         )
         if title:
             inst.checker.check_in(
                 item="Denied",
                 container=title,
-                msg=f"{site.name} overlay title is not 'Access Denied' (got {title!r})",
+                msg=f"{site.name} overlay headline is not 'Access Denied' (got {title!r})",
             )
 
-    with inst.checker.step(f"{site.name}: overlay message states the administrator blocked access (.message-title)"):
-        message = (overlay.get("message_title") or "").strip()
+    with inst.checker.step(f"{site.name}: overlay description states the administrator blocked access (p.description)"):
+        description = (overlay.get("description") or "").strip()
+        description_lower = description.lower()
         logger.info(
-            f"Assert {site.name} overlay message-title mentions 'blocked' — "
-            f"expected=\"non-empty .message-title containing 'blocked'\", found={message!r}"
+            f"Assert {site.name} overlay description mentions 'administrator' + 'blocked' — "
+            f"expected=\"non-empty p.description containing 'administrator' and 'blocked'\", "
+            f"found={description!r}"
         )
         inst.checker.check_true(
-            bool(message),
-            msg=f"{site.name} overlay missing .message-title element / text in DOM",
+            bool(description),
+            msg=f"{site.name} overlay missing p.description element / text in DOM",
         )
-        if message:
+        if description:
+            inst.checker.check_in(
+                item="administrator",
+                container=description_lower,
+                msg=(f"{site.name} overlay description does not mention 'administrator' (got {description!r})"),
+            )
             inst.checker.check_in(
                 item="blocked",
-                container=message.lower(),
-                msg=(f"{site.name} overlay message-title does not mention administrator block (got {message!r})"),
+                container=description_lower,
+                msg=(f"{site.name} overlay description does not mention 'blocked' (got {description!r})"),
             )
+
+    with inst.checker.step(f"{site.name}: overlay shows guidelines hint (p.guidelines)"):
+        guidelines = (overlay.get("guidelines") or "").strip()
+        guidelines_lower = guidelines.lower()
+        logger.info(
+            f"Assert {site.name} overlay guidelines is non-empty — "
+            f"expected=\"non-empty p.guidelines mentioning 'guidelines' or 'information'\", "
+            f"found={guidelines!r}"
+        )
+        inst.checker.check_true(
+            bool(guidelines),
+            msg=f"{site.name} overlay missing p.guidelines element / text in DOM",
+        )
+        if guidelines:
+            inst.checker.check_true(
+                ("guidelines" in guidelines_lower) or ("information" in guidelines_lower),
+                msg=(
+                    f"{site.name} overlay guidelines copy does not mention 'guidelines' "
+                    f"or 'information' (got {guidelines!r})"
+                ),
+            )
+
+    with inst.checker.step(f"{site.name}: overlay shows the roadblock illustration (.barrier-illustration)"):
+        illustration_state = "present" if overlay.get("has_illustration") else "absent"
+        logger.info(
+            f"Assert {site.name} overlay roadblock illustration — "
+            f'expected=".barrier-illustration present", found={illustration_state!r}'
+        )
+        inst.checker.check_true(
+            bool(overlay.get("has_illustration")),
+            msg=(f"{site.name} overlay missing .barrier-illustration / #illustrationBlock SVG in DOM"),
+        )
 
     with inst.checker.step(f"{site.name}: overlay carries Prompt Security branding (.powered-by)"):
         branding_state = "present" if overlay.get("has_branding") else "absent"
@@ -326,16 +427,6 @@ async def _open_and_expect_blocked(
         inst.checker.check_true(
             bool(overlay.get("has_branding")),
             msg=f"{site.name} overlay missing Prompt Security branding container (.powered-by)",
-        )
-
-    with inst.checker.step(f"{site.name}: overlay query canBypass=Prevent (no per-user override on this policy)"):
-        logger.info(
-            f"Assert {site.name} overlay query canBypass — expected='Prevent', found={overlay.get('can_bypass')!r}"
-        )
-        inst.checker.check_equal(
-            actual=overlay.get("can_bypass"),
-            expected="Prevent",
-            message=(f"{site.name} overlay declares unexpected canBypass value (got {overlay.get('can_bypass')!r})"),
         )
 
     allure.attach(
