@@ -205,9 +205,12 @@ async def _open_in_tab_and_expect_blocked(
     * An ``overlay`` snapshot was recorded by :class:`WebGenAiAppPage`.
     * Overlay query params: ``type=blockPage``, ``domain=<site.block_domain>``,
       ``canBypass=Prevent``.
-    * Overlay DOM markers: ``body.ai-site``, non-empty ``.title`` containing
-      *Denied*, ``.description`` mentioning *blocked*, branding container
-      (``#poweredBy`` / ``.powered-by``).
+    * Overlay DOM markers (after the bundle hydrates the static
+      ``pageOverlay.html`` template):
+
+      * non-empty ``.title-text`` containing *Denied*,
+      * ``.message-title`` mentioning *blocked*,
+      * ``.powered-by`` branding container present.
 
     If ``inst.chrome_extension_id`` is set, additionally asserts the overlay
     was served by that exact extension id — making cross-test contamination
@@ -293,27 +296,15 @@ async def _open_in_tab_and_expect_blocked(
                 ),
             )
 
-    with inst.checker.step(f"[tab {tab}] Overlay body has block-page class marker (body.ai-site)"):
-        body_class = overlay.get("body_class") or ""
-        logger.info(
-            f"[tab {tab}] Assert body class contains block marker — "
-            f"expected=\"'ai-site' in body.class\", found={body_class!r}"
-        )
-        inst.checker.check_in(
-            item="ai-site",
-            container=body_class,
-            msg=f"{site.name} overlay body missing 'ai-site' class (got body.class={body_class!r})",
-        )
-
-    with inst.checker.step(f"[tab {tab}] Overlay shows 'Access Denied' title (.title)"):
+    with inst.checker.step(f"[tab {tab}] Overlay shows 'Access Denied' title (.title-text)"):
         title = (overlay.get("title_text") or "").strip()
         logger.info(
             f"[tab {tab}] Assert overlay title contains 'Denied' — "
-            f"expected=\"non-empty .title containing 'Denied'\", found={title!r}"
+            f"expected=\"non-empty .title-text containing 'Denied'\", found={title!r}"
         )
         inst.checker.check_true(
             bool(title),
-            msg=f"{site.name} overlay missing .title element / text in DOM",
+            msg=f"{site.name} overlay missing .title-text element / text in DOM",
         )
         if title:
             inst.checker.check_in(
@@ -322,32 +313,31 @@ async def _open_in_tab_and_expect_blocked(
                 msg=f"{site.name} overlay title is not 'Access Denied' (got {title!r})",
             )
 
-    with inst.checker.step(f"[tab {tab}] Overlay description states the administrator blocked access (.description)"):
-        description = (overlay.get("description") or "").strip()
+    with inst.checker.step(f"[tab {tab}] Overlay message states the administrator blocked access (.message-title)"):
+        message = (overlay.get("message_title") or "").strip()
         logger.info(
-            f"[tab {tab}] Assert overlay description mentions 'blocked' — "
-            f"expected=\"non-empty .description containing 'blocked'\", found={description!r}"
+            f"[tab {tab}] Assert overlay message-title mentions 'blocked' — "
+            f"expected=\"non-empty .message-title containing 'blocked'\", found={message!r}"
         )
         inst.checker.check_true(
-            bool(description),
-            msg=f"{site.name} overlay missing .description element / text in DOM",
+            bool(message),
+            msg=f"{site.name} overlay missing .message-title element / text in DOM",
         )
-        if description:
+        if message:
             inst.checker.check_in(
                 item="blocked",
-                container=description.lower(),
-                msg=(f"{site.name} overlay description does not mention administrator block (got {description!r})"),
+                container=message.lower(),
+                msg=(f"{site.name} overlay message-title does not mention administrator block (got {message!r})"),
             )
 
-    with inst.checker.step(f"[tab {tab}] Overlay carries Prompt Security / SentinelOne branding (#poweredBy)"):
+    with inst.checker.step(f"[tab {tab}] Overlay carries Prompt Security branding (.powered-by)"):
         branding_state = "present" if overlay.get("has_branding") else "absent"
         logger.info(
-            f"[tab {tab}] Assert overlay branding container — "
-            f'expected="#poweredBy / .powered-by present", found={branding_state!r}'
+            f'[tab {tab}] Assert overlay branding container — expected=".powered-by present", found={branding_state!r}'
         )
         inst.checker.check_true(
             bool(overlay.get("has_branding")),
-            msg=f"{site.name} overlay missing Prompt Security branding container (#poweredBy / .powered-by)",
+            msg=f"{site.name} overlay missing Prompt Security branding container (.powered-by)",
         )
 
     with inst.checker.step(f"[tab {tab}] Overlay query: canBypass=Prevent (no per-user override on this policy)"):
@@ -556,8 +546,8 @@ class TestWithExtension:
         "2. The overlay was served by the **same** extension id resolved by the fixture (`self.chrome_extension_id`).\n"
         "3. Query parameter `type=blockPage`.\n"
         "4. Query parameter `domain=gemini.google.com`.\n"
-        "5. DOM markers `Access Denied` (`.title`) and the `Powered by: prompt.security` footer link "
-        "are present (best-effort; recorded as Allure detail).\n\n"
+        "5. DOM markers `Access Denied` (`.title-text`) and the `Powered by: prompt.security` footer link "
+        "(`.powered-by`) are present (best-effort; recorded as Allure detail).\n\n"
         "Failing on parsed query params (vs. fragile DOM heuristics) makes the error message itself the diagnosis."
     )
     async def test_gemini_blocked_in_tab2(self) -> None:
@@ -566,12 +556,13 @@ class TestWithExtension:
         Steps:
         1. Open a new browser tab (tab 2) — extension is loaded with the block-policy key
         2. Navigate to https://gemini.google.com/ (tenant policy: block)
-        3. Wait for the extension's pageOverlay.html to settle (up to 2 s)
+        3. Wait for the extension's pageOverlay.html bundle to populate the static template
         4. Assert final URL scheme is chrome-extension and path ends with /html/pageOverlay.html
         5. Assert overlay served by the resolved runtime extension id (self.chrome_extension_id)
         6. Assert query param type=blockPage
         7. Assert query param domain=gemini.google.com
-        8. Assert DOM markers: .title contains "Denied", Powered by: prompt.security link
+        8. Assert DOM markers: .title-text contains "Denied", .message-title mentions "blocked",
+           .powered-by branding container present
         """
         await _open_in_tab_and_expect_blocked(self, GEMINI, tab_index=2)
 
@@ -591,11 +582,12 @@ class TestWithExtension:
         Steps:
         1. Open a new browser tab (tab 3) — extension is loaded with the block-policy key
         2. Navigate to https://claude.ai/ (tenant policy: block)
-        3. Wait for the extension's pageOverlay.html to settle (up to 2 s)
+        3. Wait for the extension's pageOverlay.html bundle to populate the static template
         4. Assert final URL scheme is chrome-extension and path ends with /html/pageOverlay.html
         5. Assert overlay served by the resolved runtime extension id (self.chrome_extension_id)
         6. Assert query param type=blockPage
         7. Assert query param domain=claude.ai
-        8. Assert DOM markers: .title contains "Denied", Powered by: prompt.security link
+        8. Assert DOM markers: .title-text contains "Denied", .message-title mentions "blocked",
+           .powered-by branding container present
         """
         await _open_in_tab_and_expect_blocked(self, CLAUDE, tab_index=3)

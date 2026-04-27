@@ -10,18 +10,32 @@ A single, generic page object covers all three GenAI hosts under test
 
     * **Blocked by extension** — final URL must be the extension's block overlay
       (``chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&...``)
-      with ``domain=<expected-block-domain>``. DOM markers from the new
-      backend-rendered overlay (``.title`` ⇒ "Access Denied", ``.description``
-      ⇒ administrator-blocked message, ``#poweredBy`` ⇒ Prompt Security /
-      SentinelOne branding container, ``<body class="ai-site">``) are collected
-      best-effort and surfaced as Allure detail.
+      with ``domain=<expected-block-domain>``. DOM markers from the static
+      ``pageOverlay.html`` template (populated at runtime by
+      ``bundle/pageOverlay.bundle.js``) are collected best-effort and surfaced
+      as Allure detail:
+
+      * ``#title-text`` / ``.title-text`` ⇒ "Access Denied"
+      * ``#message-title`` / ``.message-title`` ⇒ administrator-blocked message
+      * ``.powered-by`` ⇒ Prompt Security branding container
 
     .. note::
-       The extension switched from a static ``pageOverlay.html`` template to
-       a backend-rendered HTML payload (URL query carries ``useBackendHtml=true``
-       and a ``popupToken``). The legacy DOM markers ``#title-text`` and
-       ``#message-title`` no longer exist; this page object targets the new
-       ``.title`` / ``.description`` / ``#poweredBy`` selectors.
+       The extension's overlay rendering has changed twice during this
+       project:
+
+       * **v7.0.49** — static ``pageOverlay.html`` template with id-based
+         selectors (``#title-text``, ``#message-title``, ``#poweredBy``).
+       * **v7.0.59** — switched to a *backend-rendered* HTML payload (URL
+         query carried ``useBackendHtml=true``); selectors became class-based
+         (``.title``, ``.description``) and the body gained a ``.ai-site``
+         class.
+       * **v7.0.591** — reverted to a static ``pageOverlay.html`` template
+         populated at runtime by the bundle. ``#title-text`` /
+         ``#message-title`` are present but **empty until the JS bundle
+         hydrates them** (so the wait below pivots on
+         ``document.querySelector('.title-text')?.textContent`` becoming
+         non-empty rather than on the element merely being visible). The
+         ``body`` no longer carries any policy-specific class.
 
 This collapses what would otherwise be three near-identical site-specific page
 objects into one parameterised class — see ``CHATGPT``/``GEMINI``/``CLAUDE`` for
@@ -90,11 +104,10 @@ class WebGenAiAppPage(BasePage):
         on the extension's block overlay.
 
         On the block path, instead of sleeping for the full ``settle_seconds``
-        window we wait *smartly* for the overlay's ``.title`` element to become
-        visible (the backend-rendered HTML hydrates asynchronously) and only
-        then read its DOM markers. ``settle_seconds`` therefore caps how long
-        we'll wait before giving up; the actual elapsed time is typically much
-        shorter on a hot run.
+        window we wait *smartly* for the overlay's ``.title-text`` element to
+        be **populated by the JS bundle** (the static template ships it empty).
+        ``settle_seconds`` caps how long we'll wait before giving up; the actual
+        elapsed time is typically much shorter on a hot run.
         """
         await asyncio.sleep(0.5)
         url = self.page.url
@@ -104,7 +117,14 @@ class WebGenAiAppPage(BasePage):
         if is_overlay:
             timeout_ms = max(int(settle_seconds * 1000), 8_000)
             try:
-                await self.page.locator(".title").first.wait_for(state="visible", timeout=timeout_ms)
+                # The static pageOverlay.html ships .title-text empty; the
+                # bundle populates it once it has parsed the URL query and
+                # any backend payload.  Wait for non-empty textContent so
+                # subsequent reads see the hydrated DOM.
+                await self.page.wait_for_function(
+                    "() => (document.querySelector('.title-text')?.textContent || '').trim().length > 0",
+                    timeout=timeout_ms,
+                )
             except PlaywrightError:
                 pass
         else:
@@ -131,15 +151,21 @@ class WebGenAiAppPage(BasePage):
                 "use_backend_html": qs.get("useBackendHtml", [""])[0],
             }
             try:
-                title_loc = self.page.locator(".title")
+                title_loc = self.page.locator(".title-text")
                 if await title_loc.count():
                     overlay["title_text"] = (await title_loc.first.inner_text()).strip()
             except PlaywrightError:
                 pass
             try:
-                desc_loc = self.page.locator(".description")
-                if await desc_loc.count():
-                    overlay["description"] = (await desc_loc.first.inner_text()).strip()
+                msg_loc = self.page.locator(".message-title")
+                if await msg_loc.count():
+                    overlay["message_title"] = (await msg_loc.first.inner_text()).strip()
+            except PlaywrightError:
+                pass
+            try:
+                custom_msg_loc = self.page.locator(".custom-message")
+                if await custom_msg_loc.count():
+                    overlay["custom_message"] = (await custom_msg_loc.first.inner_text()).strip()
             except PlaywrightError:
                 pass
             try:
@@ -149,7 +175,7 @@ class WebGenAiAppPage(BasePage):
             except PlaywrightError:
                 pass
             try:
-                branding_loc = self.page.locator("#poweredBy, .powered-by")
+                branding_loc = self.page.locator(".powered-by")
                 overlay["has_branding"] = bool(await branding_loc.count())
             except PlaywrightError:
                 overlay["has_branding"] = False

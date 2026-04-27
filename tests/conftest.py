@@ -146,20 +146,35 @@ async def _persistent_context_lifecycle(
         if a not in launch_args:
             launch_args.append(a)
 
-    # === EXPERIMENTAL: Cloudflare bot-detection bypass attempt for ChatGPT ===
-    # If this does not get past Cloudflare's "Verify you are human" challenge
-    # under Playwright automation, revert this entire block.  Patches applied:
+    # === Cloudflare bot-detection bypass for ChatGPT ===
+    # ChatGPT is fronted by a Cloudflare "Verify you are human" challenge that
+    # detects Playwright via several signals.  We patch the most impactful ones:
+    #
     #   1. --disable-blink-features=AutomationControlled  (removes WebDriver flag)
-    #   2. user_agent override                             (real Chrome 130 macOS)
+    #   2. user_agent override                             (mirrors the actual
+    #                                                       Chromium build that
+    #                                                       Playwright is running —
+    #                                                       a stale UA / version
+    #                                                       mismatch is itself a
+    #                                                       detection signal, so
+    #                                                       this is kept in sync
+    #                                                       with the real Chrome
+    #                                                       major version)
     #   3. add_init_script                                 (hide navigator.webdriver,
-    #                                                      mock plugins/languages,
-    #                                                      add chrome.runtime stub,
-    #                                                      patch Permissions API)
+    #                                                       mock plugins/languages,
+    #                                                       hardwareConcurrency,
+    #                                                       deviceMemory, the
+    #                                                       chrome.runtime stub,
+    #                                                       and Permissions API)
+    #
+    # When Playwright bumps its bundled Chromium major version, update the UA
+    # below to match (the bundled version is printed by ``playwright install
+    # chromium`` and visible in ``--version`` of the downloaded binary).
     if "--disable-blink-features=AutomationControlled" not in launch_args:
         launch_args.append("--disable-blink-features=AutomationControlled")
     real_chrome_user_agent = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
     )
     stealth_init_script = """
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -171,6 +186,8 @@ async def _persistent_context_lifecycle(
             ],
         });
         Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+        Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
         if (!window.chrome) { window.chrome = {}; }
         if (!window.chrome.runtime) { window.chrome.runtime = {}; }
         const originalQuery = window.navigator.permissions.query;
@@ -180,7 +197,7 @@ async def _persistent_context_lifecycle(
                 originalQuery(params)
         );
     """
-    # === END EXPERIMENTAL block ===
+    # === END Cloudflare bypass block ===
 
     async with async_playwright() as pw:
         context = await pw.chromium.launch_persistent_context(

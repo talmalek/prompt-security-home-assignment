@@ -97,20 +97,30 @@ Three tests, one tab each, same three sites:
   diagnosis.
 * **Claude AI (block):** same as Gemini, `domain=claude.ai`.
 
-DOM markers from the new backend-rendered overlay are collected as Allure evidence:
-`<body class="ai-site">` (block-page marker), `.title` ("Access Denied"),
-`.description` (administrator-blocked message), and the `#poweredBy` /
-`.powered-by` Prompt Security / SentinelOne branding container.
+DOM markers from the static `pageOverlay.html` template (populated at runtime by
+`bundle/pageOverlay.bundle.js`) are collected as Allure evidence: `.title-text`
+("Access Denied"), `.message-title` (administrator-blocked message such as
+*"The domain claude.ai was blocked by your administrator"*), and the
+`.powered-by` Prompt Security branding container.
 
-> **Note on extension drift.** The extension recently migrated its block overlay
-> from a static `pageOverlay.html` template (DOM ids `#title-text` /
-> `#message-title`, `<a href="https://prompt.security">` link) to a
-> backend-rendered HTML payload (URL query carries `useBackendHtml=true` and a
-> `popupToken`). The new layout uses class-based selectors (`.title`,
-> `.description`) and an SVG-only branding block (`#poweredBy`) — see commit
-> history for the migration. Because CI always fetches the latest CRX from the
-> Chrome Web Store, this kind of drift is caught the moment it ships and the
-> tests are updated alongside.
+> **Note on extension drift.** The extension's overlay has changed twice during
+> this project. CI always fetches the latest CRX from the Chrome Web Store, so
+> each shape was caught the moment it shipped and the tests were updated
+> alongside:
+>
+> 1. **v7.0.49** — original static `pageOverlay.html` template, id-based
+>    selectors (`#title-text`, `#message-title`, `#poweredBy`).
+> 2. **v7.0.59** — switched to a **backend-rendered** HTML payload (URL query
+>    carried `useBackendHtml=true` and a `popupToken`); selectors became
+>    class-based (`.title`, `.description`) and the `body` gained a `.ai-site`
+>    class.
+> 3. **v7.0.591** *(current)* — reverted to the static `pageOverlay.html`
+>    template populated at runtime by the bundle. The page object now waits for
+>    `document.querySelector('.title-text')?.textContent` to be **non-empty**
+>    (template ships the elements empty until the bundle hydrates them) and
+>    asserts on `.title-text`, `.message-title`, and `.powered-by`. The
+>    structural URL contract is unchanged — `chrome-extension://<id>/html/pageOverlay.html?type=blockPage&domain=…&canBypass=Prevent`
+>    — and remains the primary diagnosis surface.
 
 #### Failure pipeline demo — `TestFailureDemo`
 
