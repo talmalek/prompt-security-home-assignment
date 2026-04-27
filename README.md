@@ -91,13 +91,26 @@ Three tests, one tab each, same three sites:
 * **ChatGPT (allow):** final URL is a normal web origin — extension respects the
   allow rule.
 * **Gemini (block):** final URL is
-  `chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&…`.
-  Assertions key off parsed URL query parameters (`type`, `domain`, extension id) —
-  *not* fragile DOM text — so the failure message is itself the diagnosis.
+  `chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&canBypass=Prevent&…`.
+  Assertions key off parsed URL query parameters (`type`, `domain`, extension id,
+  `canBypass`) — *not* fragile DOM text — so the failure message is itself the
+  diagnosis.
 * **Claude AI (block):** same as Gemini, `domain=claude.ai`.
 
-DOM markers (`#title-text` "Access Denied", "Powered by: prompt.security" footer
-link) are collected best-effort and attached as Allure evidence.
+DOM markers from the new backend-rendered overlay are collected as Allure evidence:
+`<body class="ai-site">` (block-page marker), `.title` ("Access Denied"),
+`.description` (administrator-blocked message), and the `#poweredBy` /
+`.powered-by` Prompt Security / SentinelOne branding container.
+
+> **Note on extension drift.** The extension recently migrated its block overlay
+> from a static `pageOverlay.html` template (DOM ids `#title-text` /
+> `#message-title`, `<a href="https://prompt.security">` link) to a
+> backend-rendered HTML payload (URL query carries `useBackendHtml=true` and a
+> `popupToken`). The new layout uses class-based selectors (`.title`,
+> `.description`) and an SVG-only branding block (`#poweredBy`) — see commit
+> history for the migration. Because CI always fetches the latest CRX from the
+> Chrome Web Store, this kind of drift is caught the moment it ships and the
+> tests are updated alongside.
 
 #### Failure pipeline demo — `TestFailureDemo`
 

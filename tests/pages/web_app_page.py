@@ -10,9 +10,18 @@ A single, generic page object covers all three GenAI hosts under test
 
     * **Blocked by extension** — final URL must be the extension's block overlay
       (``chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&...``)
-      with ``domain=<expected-block-domain>``. DOM markers (``Access Denied``
-      title + ``Powered by:`` footer link to ``prompt.security``) are collected
+      with ``domain=<expected-block-domain>``. DOM markers from the new
+      backend-rendered overlay (``.title`` ⇒ "Access Denied", ``.description``
+      ⇒ administrator-blocked message, ``#poweredBy`` ⇒ Prompt Security /
+      SentinelOne branding container, ``<body class="ai-site">``) are collected
       best-effort and surfaced as Allure detail.
+
+    .. note::
+       The extension switched from a static ``pageOverlay.html`` template to
+       a backend-rendered HTML payload (URL query carries ``useBackendHtml=true``
+       and a ``popupToken``). The legacy DOM markers ``#title-text`` and
+       ``#message-title`` no longer exist; this page object targets the new
+       ``.title`` / ``.description`` / ``#poweredBy`` selectors.
 
 This collapses what would otherwise be three near-identical site-specific page
 objects into one parameterised class — see ``CHATGPT``/``GEMINI``/``CLAUDE`` for
@@ -74,13 +83,33 @@ class WebGenAiAppPage(BasePage):
         except PlaywrightError:
             pass
 
-    async def assess_state(self, *, settle_seconds: float = 1.5) -> dict[str, Any]:
+    async def assess_state(self, *, settle_seconds: float = 2.0) -> dict[str, Any]:
         """Snapshot the post-navigation state.
 
         Always returns a dict; the ``overlay`` key is only present when we landed
         on the extension's block overlay.
+
+        On the block path, instead of sleeping for the full ``settle_seconds``
+        window we wait *smartly* for the overlay's ``.title`` element to become
+        visible (the backend-rendered HTML hydrates asynchronously) and only
+        then read its DOM markers. ``settle_seconds`` therefore caps how long
+        we'll wait before giving up; the actual elapsed time is typically much
+        shorter on a hot run.
         """
-        await asyncio.sleep(settle_seconds)
+        await asyncio.sleep(0.5)
+        url = self.page.url
+        parsed = urlparse(url)
+        is_overlay = parsed.scheme == "chrome-extension" and parsed.path.endswith(_OVERLAY_PATH)
+
+        if is_overlay:
+            timeout_ms = max(int(settle_seconds * 1000), 8_000)
+            try:
+                await self.page.locator(".title").first.wait_for(state="visible", timeout=timeout_ms)
+            except PlaywrightError:
+                pass
+        else:
+            await asyncio.sleep(max(0.0, settle_seconds - 0.5))
+
         url = self.page.url
         parsed = urlparse(url)
         snapshot: dict[str, Any] = {
@@ -97,23 +126,36 @@ class WebGenAiAppPage(BasePage):
                 "type": qs.get("type", [""])[0],
                 "domain": qs.get("domain", [""])[0],
                 "original_url": qs.get("originalUrl", [""])[0],
+                "can_bypass": qs.get("canBypass", [""])[0],
+                "is_enterprise_version": qs.get("isEnterpriseVersion", [""])[0],
+                "use_backend_html": qs.get("useBackendHtml", [""])[0],
             }
             try:
-                title_loc = self.page.locator("#title-text")
+                title_loc = self.page.locator(".title")
                 if await title_loc.count():
                     overlay["title_text"] = (await title_loc.first.inner_text()).strip()
             except PlaywrightError:
                 pass
             try:
-                msg_loc = self.page.locator("#message-title")
-                if await msg_loc.count():
-                    overlay["message_title"] = (await msg_loc.first.inner_text()).strip()
+                desc_loc = self.page.locator(".description")
+                if await desc_loc.count():
+                    overlay["description"] = (await desc_loc.first.inner_text()).strip()
             except PlaywrightError:
                 pass
             try:
-                link_loc = self.page.locator("a[href*='prompt.security']")
-                if await link_loc.count():
-                    overlay["powered_by"] = await link_loc.first.get_attribute("href") or ""
+                guidelines_loc = self.page.locator(".guidelines")
+                if await guidelines_loc.count():
+                    overlay["guidelines"] = (await guidelines_loc.first.inner_text()).strip()
+            except PlaywrightError:
+                pass
+            try:
+                branding_loc = self.page.locator("#poweredBy, .powered-by")
+                overlay["has_branding"] = bool(await branding_loc.count())
+            except PlaywrightError:
+                overlay["has_branding"] = False
+            try:
+                body_class = await self.page.evaluate("document.body && document.body.className")
+                overlay["body_class"] = (body_class or "").strip()
             except PlaywrightError:
                 pass
             snapshot["overlay"] = overlay

@@ -188,7 +188,10 @@ class TestWithoutExtension:
             )
 
         with self.checker.step(f"[tab {tab}] {site.name}: final scheme is web (https/http), NOT 'chrome-extension'"):
-            logger.info(f"[tab {tab}] Verifying {site.name} final scheme is web")
+            logger.info(
+                f"[tab {tab}] Assert {site.name} final scheme is web — "
+                f"expected='NOT chrome-extension', found={snap['scheme']!r}"
+            )
             self.checker.check_not_equal(
                 a=snap["scheme"],
                 b="chrome-extension",
@@ -199,7 +202,10 @@ class TestWithoutExtension:
             )
 
         with self.checker.step(f"[tab {tab}] {site.name}: no block-overlay snapshot recorded"):
-            logger.info(f"[tab {tab}] Verifying {site.name} has no block overlay")
+            overlay_state = "present" if "overlay" in snap else "absent"
+            logger.info(
+                f"[tab {tab}] Assert {site.name} has no overlay snapshot — expected='absent', found={overlay_state!r}"
+            )
             self.checker.check_not_in(
                 item="overlay",
                 container=snap,
@@ -336,7 +342,10 @@ class TestWithExtension:
         with self.checker.step(
             f"[tab {tab}] {site.name}: ALLOW policy → final URL is a real web origin, not the extension overlay"
         ):
-            logger.info(f"[tab {tab}] Verifying {site.name} stayed on web origin")
+            logger.info(
+                f"[tab {tab}] Assert {site.name} ALLOW policy — final scheme is web — "
+                f"expected='NOT chrome-extension', found={snap['scheme']!r}"
+            )
             self.checker.check_not_equal(
                 a=snap["scheme"],
                 b="chrome-extension",
@@ -347,7 +356,10 @@ class TestWithExtension:
             )
 
         with self.checker.step(f"[tab {tab}] {site.name}: no block-overlay snapshot recorded"):
-            logger.info(f"[tab {tab}] Verifying {site.name} has no block overlay")
+            overlay_state = "present" if "overlay" in snap else "absent"
+            logger.info(
+                f"[tab {tab}] Assert {site.name} has no overlay snapshot — expected='absent', found={overlay_state!r}"
+            )
             self.checker.check_not_in(
                 item="overlay",
                 container=snap,
@@ -384,7 +396,7 @@ class TestWithExtension:
             )
 
         with self.checker.step(f"[tab {tab}] Final URL scheme is 'chrome-extension'"):
-            logger.info(f"[tab {tab}] Verifying final URL uses extension scheme")
+            logger.info(f"[tab {tab}] Assert final URL scheme — expected='chrome-extension', found={snap['scheme']!r}")
             self.checker.check_equal(
                 actual=snap["scheme"],
                 expected="chrome-extension",
@@ -395,7 +407,8 @@ class TestWithExtension:
             )
 
         with self.checker.step(f"[tab {tab}] Final URL is the extension's pageOverlay.html (block snapshot recorded)"):
-            logger.info(f"[tab {tab}] Verifying final URL is extension overlay")
+            overlay_state = "present" if "overlay" in snap else "absent"
+            logger.info(f"[tab {tab}] Assert overlay snapshot recorded — expected='present', found={overlay_state!r}")
             self.checker.check_in(
                 item="overlay",
                 container=snap,
@@ -409,7 +422,7 @@ class TestWithExtension:
             return
 
         with self.checker.step(f"[tab {tab}] Overlay query: type=blockPage"):
-            logger.info(f"[tab {tab}] Verifying overlay type query")
+            logger.info(f"[tab {tab}] Assert overlay query type — expected='blockPage', found={overlay.get('type')!r}")
             self.checker.check_equal(
                 actual=overlay.get("type"),
                 expected="blockPage",
@@ -417,7 +430,10 @@ class TestWithExtension:
             )
 
         with self.checker.step(f"[tab {tab}] Overlay query: domain={site.block_domain}"):
-            logger.info(f"[tab {tab}] Verifying overlay domain query")
+            logger.info(
+                f"[tab {tab}] Assert overlay query domain — "
+                f"expected={site.block_domain!r}, found={overlay.get('domain')!r}"
+            )
             self.checker.check_equal(
                 actual=overlay.get("domain"),
                 expected=site.block_domain,
@@ -430,7 +446,10 @@ class TestWithExtension:
         ext_id = getattr(self, "chrome_extension_id", None)
         if ext_id:
             with self.checker.step(f"[tab {tab}] Overlay served by the loaded extension id ({ext_id})"):
-                logger.info(f"[tab {tab}] Verifying overlay extension id")
+                logger.info(
+                    f"[tab {tab}] Assert overlay extension id — "
+                    f"expected={ext_id!r}, found={overlay.get('extension_id')!r}"
+                )
                 self.checker.check_equal(
                     actual=overlay.get("extension_id"),
                     expected=ext_id,
@@ -440,14 +459,27 @@ class TestWithExtension:
                     ),
                 )
 
-        with self.checker.step(
-            f"[tab {tab}] Overlay carries 'Access Denied' title and 'Powered by: prompt.security' branding"
-        ):
-            logger.info(f"[tab {tab}] Verifying overlay title and branding")
-            title = (overlay.get("title_text") or overlay.get("message_title") or "").strip()
+        with self.checker.step(f"[tab {tab}] Overlay body has block-page class marker (body.ai-site)"):
+            body_class = overlay.get("body_class") or ""
+            logger.info(
+                f"[tab {tab}] Assert body class contains block marker — "
+                f"expected=\"'ai-site' in body.class\", found={body_class!r}"
+            )
+            self.checker.check_in(
+                item="ai-site",
+                container=body_class,
+                msg=f"{site.name} overlay body missing 'ai-site' class (got body.class={body_class!r})",
+            )
+
+        with self.checker.step(f"[tab {tab}] Overlay shows 'Access Denied' title (.title)"):
+            title = (overlay.get("title_text") or "").strip()
+            logger.info(
+                f"[tab {tab}] Assert overlay title contains 'Denied' — "
+                f"expected=\"non-empty .title containing 'Denied'\", found={title!r}"
+            )
             self.checker.check_true(
                 bool(title),
-                msg=f"{site.name} overlay missing #title-text / #message-title in DOM",
+                msg=f"{site.name} overlay missing .title element / text in DOM",
             )
             if title:
                 self.checker.check_in(
@@ -455,11 +487,47 @@ class TestWithExtension:
                     container=title,
                     msg=f"{site.name} overlay title is not 'Access Denied' (got {title!r})",
                 )
-            powered_by = overlay.get("powered_by") or ""
-            self.checker.check_in(
-                item="prompt.security",
-                container=powered_by,
-                msg=f"{site.name} overlay missing 'Powered by: prompt.security' link (got {powered_by!r})",
+
+        with self.checker.step(
+            f"[tab {tab}] Overlay description states the administrator blocked access (.description)"
+        ):
+            description = (overlay.get("description") or "").strip()
+            logger.info(
+                f"[tab {tab}] Assert overlay description mentions 'blocked' — "
+                f"expected=\"non-empty .description containing 'blocked'\", found={description!r}"
+            )
+            self.checker.check_true(
+                bool(description),
+                msg=f"{site.name} overlay missing .description element / text in DOM",
+            )
+            if description:
+                self.checker.check_in(
+                    item="blocked",
+                    container=description.lower(),
+                    msg=(f"{site.name} overlay description does not mention administrator block (got {description!r})"),
+                )
+
+        with self.checker.step(f"[tab {tab}] Overlay carries Prompt Security / SentinelOne branding (#poweredBy)"):
+            branding_state = "present" if overlay.get("has_branding") else "absent"
+            logger.info(
+                f"[tab {tab}] Assert overlay branding container — "
+                f'expected="#poweredBy / .powered-by present", found={branding_state!r}'
+            )
+            self.checker.check_true(
+                bool(overlay.get("has_branding")),
+                msg=f"{site.name} overlay missing Prompt Security branding container (#poweredBy / .powered-by)",
+            )
+
+        with self.checker.step(f"[tab {tab}] Overlay query: canBypass=Prevent (no per-user override on this policy)"):
+            logger.info(
+                f"[tab {tab}] Assert overlay query canBypass — expected='Prevent', found={overlay.get('can_bypass')!r}"
+            )
+            self.checker.check_equal(
+                actual=overlay.get("can_bypass"),
+                expected="Prevent",
+                message=(
+                    f"{site.name} overlay declares unexpected canBypass value (got {overlay.get('can_bypass')!r})"
+                ),
             )
 
         allure.attach(
