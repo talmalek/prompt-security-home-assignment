@@ -25,6 +25,7 @@ import io
 import json
 import shutil
 import struct
+import sys
 import zipfile
 from pathlib import Path
 
@@ -37,8 +38,16 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from config.settings import settings
-from utils.logger import logger
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+# Make this script runnable directly (``python scripts/fetch_extension.py``) — the
+# repo layout uses ``pythonpath = ["."]`` for pytest, but that only affects test
+# runs. Prepend the repo root so ``config.*`` / ``utils.*`` imports always
+# resolve regardless of invocation style. Same pattern as scripts/push_to_notion.py.
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from config.settings import settings  # noqa: E402
+from utils.logger import logger  # noqa: E402
 
 CRX_MAGIC = b"Cr24"
 
