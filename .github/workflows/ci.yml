@@ -65,6 +65,12 @@ jobs:
         id: pytest_demo
         if: always()
         continue-on-error: true
+        # ``PYTEST_SUMMARY_APPEND=1`` tells utils.pytest_summary to merge this
+        # run's counts into the prior step's summary.json instead of clobbering
+        # it. Without this, scripts/push_to_notion.py only sees the demo step's
+        # 2 failed tests rather than the full 6 pass + 2 fail picture.
+        env:
+          PYTEST_SUMMARY_APPEND: "1"
         run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' uv run pytest -v -m "demo"
 
       - name: Warn if demo step had failures
