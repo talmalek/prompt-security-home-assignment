@@ -18,14 +18,25 @@ downstream consumers (Notion, Slack, GitHub step summaries) see the full
 8-test picture rather than only the second invocation's 2 demo tests.
 
 Merge semantics:
-* counts (passed/failed/skipped/errors) and markers: summed
-* ``failed_tests``: union, preserving first-seen order
-* ``started_at``: kept from the earliest run (so duration covers both)
-* ``finished_at``: taken from the most recent run
-* ``duration_seconds``: derived from earliest start to latest finish
-* ``pytest_exit_code``: ``max`` of all runs (worst non-zero wins)
+* counts (``passed``/``failed``/``skipped``/``errors``): summed across runs
+  (the new run's outcomes are added on top of the hydrated prior totals).
+* ``markers``: **re-collected fresh on every invocation** — pytest collects
+  the full test superset on every run and only filters via ``-m`` at
+  execution, so hydrating marker_counts from the prior summary would
+  double-count every marker. ``pytest_collection_modifyitems`` rebuilds
+  the counter from scratch each session; the prior ``markers`` dict is
+  discarded.
+* ``failed_tests``: hydrated list from the prior summary plus appends from
+  the new run. The CI workflow only merges disjoint test sets (production
+  uses ``-m "not demo"``, demo uses ``-m "demo"``), so the result is a
+  union; if you ever merge overlapping sets the same nodeid could appear
+  twice.
+* ``started_at``: kept from the earliest run (so duration covers both).
+* ``finished_at``: taken from the most recent run.
+* ``duration_seconds``: derived from earliest start to latest finish.
+* ``pytest_exit_code``: ``max`` of all runs (worst non-zero wins).
 * ``exit_status``: re-derived from cumulative counts (``passed`` /
-  ``failed`` / ``partial`` / ``no-tests``)
+  ``failed`` / ``partial`` / ``no-tests``).
 """
 
 from __future__ import annotations

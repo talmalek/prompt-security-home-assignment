@@ -533,9 +533,10 @@ async def browser_context_plain(request: pytest.FixtureRequest) -> AsyncIterator
     """Vanilla persistent Chromium context, no extension loaded — baseline behaviour.
 
     Function-scoped: every test gets a freshly-launched Chromium on a wiped
-    user-data dir.  The active context, the asyncio loop, and a placeholder
+    user-data dir.  The active context and a placeholder
     ``chrome_extension_id = None`` are written to ``self`` so the test methods
-    (and the failure-report hook) can reach them via ``request.instance``.
+    (and ``_capture_failure_artifacts`` via ``_resolve_failure_page``) can
+    reach them via ``request.instance``.
     """
     instance_id = _instance_id_for(request)
     async with _persistent_context_lifecycle(instance_id=instance_id, with_extension=False) as (ctx, _):

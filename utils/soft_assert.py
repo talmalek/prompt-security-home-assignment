@@ -4,15 +4,26 @@ Two severities are supported:
 
 * **Soft errors** (``check_*`` / ``fail``) — collected during the test, attached
   to the corresponding Allure step as red evidence, and surfaced as a single
-  ``pytest.fail`` from :meth:`assert_all` in ``teardown_method``. Subsequent
-  steps **do** run, so the report shows the full failure surface — not just
+  ``pytest.fail`` from :meth:`assert_all`. Subsequent steps inside the test
+  body **do** run, so the report shows the full failure surface — not just
   the first one.
 
 * **Best-effort warnings** (``note``) — collected during the test, attached
-  to the Allure report as yellow evidence at teardown, but **never** fail the
-  test. Use for rendering-evidence checks where a regression is informational
-  (the page didn't render quite the way we expected) but doesn't change the
-  pass/fail verdict.
+  to the Allure report as yellow evidence the next time :meth:`assert_all`
+  runs, but **never** fail the test. Use for rendering-evidence checks where
+  a regression is informational (the page didn't render quite the way we
+  expected) but doesn't change the pass/fail verdict.
+
+When :meth:`assert_all` is called
+---------------------------------
+The test helpers in :mod:`tests.ui.test_policy_enforcement`
+(``_open_and_expect_blocked`` / ``_open_and_expect_unblocked``) call
+:meth:`assert_all` themselves at the end of the test body — i.e. during the
+pytest **call** phase, while the page is still alive — so the failure
+screenshot fixture in ``tests/conftest.py`` can capture the live page before
+the browser context tears down.  The class-level ``teardown_method`` hooks
+also call :meth:`assert_all` as a safety net; that second call is an
+idempotent no-op because the errors / warnings have already been drained.
 
 Unexpected exceptions raised inside :meth:`step` (e.g. Playwright timeouts,
 network errors) still abort the test — they mean the check itself couldn't

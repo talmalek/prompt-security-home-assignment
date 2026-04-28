@@ -15,8 +15,16 @@ Six end-to-end scenarios in two classes (one per browser fixture):
   * ChatGPT — loads normally (no overlay).
   * Gemini — blocked: lands on
     ``chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&...``
-    with the *Access Denied* DOM and a *Powered by: prompt.security* footer.
+    with the v7.1.0 backend-rendered *Access Denied* DOM and a ``.powered-by``
+    Prompt Security branding container (logo SVG only — the older "Powered by:"
+    text label is no longer rendered by this version).
   * Claude AI — blocked: same overlay, ``domain=claude.ai``.
+
+The block assertions are split by severity (see :func:`_open_and_expect_blocked`):
+URL / query-parameter checks are the **hard contract** (any failure turns the test
+red); rendered-DOM markers are **best-effort warnings** (collected via
+``SoftAssert.note(...)`` and surfaced as yellow Allure attachments — never
+failing the test on their own).
 
 Browser isolation
 -----------------

@@ -5,7 +5,7 @@ install:
 	uv run playwright install --with-deps chromium
 
 extension:
-	uv run python scripts/fetch_extension.py
+	uv run python scripts/fetch_extension.py --force
 
 test:
 	uv run pytest

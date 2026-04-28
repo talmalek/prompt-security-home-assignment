@@ -43,10 +43,18 @@ block-overlay assertion fires and produces the failure evidence.
 
 Marker & CI
 -----------
-All tests in this file carry ``@pytest.mark.demo``.  CI runs the full
-suite including these tests; the pytest step uses ``continue-on-error: true``
-so intentional failures never turn the overall workflow red.  A
-``::warning::`` annotation is emitted in the CI log when any test fails.
+All tests in this file carry ``@pytest.mark.demo``.  CI runs pytest in
+**two separate steps**:
+
+* ``Pytest (production)`` — ``-m "not demo"``.  No ``continue-on-error`` —
+  a real regression in the 6 production tests turns the workflow red.
+* ``Pytest (demo / intentional failures)`` — ``-m "demo"`` with
+  ``continue-on-error: true`` and ``PYTEST_SUMMARY_APPEND=1`` (so
+  ``utils.pytest_summary`` merges the demo counts into the production
+  step's ``reports/summary.json`` instead of clobbering it).
+
+A ``::warning::`` annotation is emitted in the CI log when the demo step
+records any failure; the overall workflow stays green.
 
 Run locally (intentional failures + failure-screenshot evidence)::
 
@@ -166,7 +174,12 @@ class TestFailureDemo:
     every test launches its own Chromium with the open-policy popup
     configured.  Failure-evidence attachments (``failure_screenshot``,
     ``page_source``, the Playwright trace ZIP) are produced per-test by the
-    ``pytest_runtest_makereport`` hook.
+    :func:`tests.conftest._capture_failure_artifacts` helper, which is invoked
+    from the ``finally`` block of :func:`browser_context_with_open_extension`
+    — that ordering keeps the page alive on the test's own asyncio loop while
+    the screenshot is taken.  The ``pytest_runtest_makereport`` hook only
+    stashes the per-phase test report on the item; it does not attach
+    artifacts itself.
 
     Expected Allure outcome
     ~~~~~~~~~~~~~~~~~~~~~~~
@@ -209,15 +222,18 @@ class TestFailureDemo:
            no block rules, so Gemini loads normally (final URL: `https://...`)
         3. Wait for post-navigation state to settle
         4. Assert final URL scheme is `chrome-extension` (INTENTIONALLY WRONG —
-           records a soft failure via `SoftAssert.check_*`)
-        5. Assert overlay snapshot present (also soft-fails)
-        6. The two soft failures are collected without aborting; downstream
-           steps in `_open_and_expect_blocked` short-circuit at the
-           `if overlay is None: return` guard
-        7. `teardown_method` calls `assert_all()`, which raises with both
-           failures and triggers the async `_capture_on_failure` autouse
-           fixture to attach `failure_screenshot`, `page_source`, and the
-           Playwright trace ZIP — exactly what the demo is here to prove
+           records a soft failure via `SoftAssert.check_equal`)
+        5. Assert overlay snapshot present (also soft-fails via `check_in`)
+        6. The two soft failures are collected without aborting; the helper
+           short-circuits at `if overlay is None: return` after explicitly
+           calling `inst.checker.assert_all()`
+        7. `assert_all()` raises (during the **call** phase, while the page
+           is still alive). That triggers the `finally` block of
+           `browser_context_with_open_extension`, which awaits
+           `_capture_failure_artifacts(request)` — attaching
+           `failure_screenshot`, `page_source`, and the Playwright trace ZIP
+           to the Allure result. `teardown_method`'s second `assert_all()`
+           is then an idempotent no-op (errors / warnings already drained).
         """
         logger.info("Running failure demo: Gemini block assertion (expecting failure)")
         await run_block_assertion(self, GEMINI)
@@ -245,15 +261,18 @@ class TestFailureDemo:
            block rules, so Claude loads normally (final URL: `https://...`)
         3. Wait for post-navigation state to settle
         4. Assert final URL scheme is `chrome-extension` (INTENTIONALLY WRONG —
-           records a soft failure via `SoftAssert.check_*`)
-        5. Assert overlay snapshot present (also soft-fails)
-        6. The two soft failures are collected without aborting; downstream
-           steps in `_open_and_expect_blocked` short-circuit at the
-           `if overlay is None: return` guard
-        7. `teardown_method` calls `assert_all()`, which raises with both
-           failures and triggers the async `_capture_on_failure` autouse
-           fixture to attach `failure_screenshot`, `page_source`, and the
-           Playwright trace ZIP — exactly what the demo is here to prove
+           records a soft failure via `SoftAssert.check_equal`)
+        5. Assert overlay snapshot present (also soft-fails via `check_in`)
+        6. The two soft failures are collected without aborting; the helper
+           short-circuits at `if overlay is None: return` after explicitly
+           calling `inst.checker.assert_all()`
+        7. `assert_all()` raises (during the **call** phase, while the page
+           is still alive). That triggers the `finally` block of
+           `browser_context_with_open_extension`, which awaits
+           `_capture_failure_artifacts(request)` — attaching
+           `failure_screenshot`, `page_source`, and the Playwright trace ZIP
+           to the Allure result. `teardown_method`'s second `assert_all()`
+           is then an idempotent no-op (errors / warnings already drained).
         """
         logger.info("Running failure demo: Claude AI block assertion (expecting failure)")
         await run_block_assertion(self, CLAUDE)

@@ -13,7 +13,9 @@ The suite runs **8 test scenarios** across three pytest classes, each backed by 
 > The 2 demo tests use a **real API key with no block rules** to intentionally trigger
 > assertion failures — they demonstrate the full failure-reporting pipeline
 > (Allure step diff, screenshot, page source, Playwright trace).
-> CI stays green via `continue-on-error: true`.
+> CI runs them in a separate `Pytest (demo / intentional failures)` step that
+> carries `continue-on-error: true`, so their failures never gate the build
+> (the production step has no such escape hatch and must pass green).
 
 ---
 
@@ -65,8 +67,19 @@ traceability.
 All fixtures are backed by a single shared lifecycle helper in `tests/conftest.py`:
 
 ```
-_persistent_context_lifecycle(instance_id, with_extension, api_key_override?)
+_persistent_context_lifecycle(
+    instance_id,
+    with_extension,
+    api_key_override=None,
+    wait_for_block_active=True,
+)
 ```
+
+`wait_for_block_active` controls whether the post-popup policy-activation barrier
+runs — it's `True` for the production fixtures (the configured tenant blocks
+Gemini & Claude AI, so the probe always succeeds) and `False` for the
+failure-demo fixture (open-policy tenant has no block rules, so the probe
+would otherwise reload until its 30 s timeout for nothing).
 
 The helper is **function-scoped** — every test gets its own freshly-launched browser
 on a wiped user-data directory.  This trades a few seconds of extension-popup
@@ -132,23 +145,30 @@ Three tests, one site each:
   redirect, no overlay snapshot) — extension respects the allow rule.
 * **Gemini (block):** final URL is
   `chrome-extension://<runtime-id>/html/pageOverlay.html?type=blockPage&domain=gemini.google.com&canBypass=Prevent&useBackendHtml=true&popupToken=…`.
-  Assertions verify **both** the URL query (`type`, `domain`, extension id,
-  `canBypass`, `useBackendHtml=true`, non-empty `popupToken`) **and** the rendered
-  DOM of the v7.1.0+ backend-rendered overlay (see below) — so a failure message
-  is precise about *which* part drifted.
+  The block assertions are split into two severities, so a failure message is
+  precise about *which* part drifted:
+  * **Hard contract** — URL / query parameters (`scheme=chrome-extension`,
+    overlay path, `type=blockPage`, `domain`, runtime extension id,
+    `canBypass=Prevent`, `useBackendHtml=true`, non-empty `popupToken`).
+    Any failure here turns the test red.
+  * **Best-effort rendering evidence** — the rendered DOM of the v7.1.0+
+    backend-rendered overlay (see table below). Collected via
+    `SoftAssert.note(...)` and attached to Allure as yellow evidence; a
+    drift here records a warning but does **not** fail the test, because
+    the extension's UI team revises these selectors between releases.
 * **Claude AI (block):** same shape as Gemini, with `domain=claude.ai`.
 
 DOM contract for the **v7.1.0+ backend-rendered overlay** (the only UI the
 suite supports — see "Always testing the latest release" above):
 
-| Selector | Asserted property |
-|---|---|
-| `body.ai-site`            | class present (single signal that we're on the latest backend-rendered overlay) |
-| `h1.title`                | non-empty text containing *Denied* (the "Access Denied" headline) |
-| `p.description`           | non-empty text containing *administrator* and *blocked* (the reason copy) |
-| `p.guidelines`            | non-empty text mentioning *guidelines* or *information* (the policy hint copy) |
-| `.barrier-illustration` (`#illustrationBlock`) | element present (the roadblock SVG — visual signal of the block UI) |
-| `.powered-by`             | element present (Prompt Security branding container) |
+| Selector | Asserted property | Severity |
+|---|---|---|
+| `body.ai-site`            | class present (single signal that we're on the latest backend-rendered overlay) | best-effort |
+| `h1.title`                | non-empty text containing *Denied* (the "Access Denied" headline) | best-effort |
+| `p.description`           | non-empty text containing *administrator* and *blocked* (the reason copy) | best-effort |
+| `p.guidelines`            | non-empty text mentioning *guidelines* or *information* (the policy hint copy) | best-effort |
+| `.barrier-illustration` (`#illustrationBlock`) | element present (the roadblock SVG — visual signal of the block UI) | best-effort |
+| `.powered-by`             | element present — Prompt Security branding container (logo SVG only; the older "Powered by:" text label is no longer rendered) | best-effort |
 
 The page object (`tests/pages/web_app_page.py::assess_state`) smart-waits on
 `document.querySelector('h1.title')?.textContent` becoming non-empty before
@@ -260,9 +280,20 @@ Workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
    Chrome Web Store is unreachable; pytest's `_ensure_latest_extension`
    autouse fixture also re-fetches at session start as a safety net, so the
    suite **always** tests the currently published version).
-2. Install **Xvfb** then run `xvfb-run … uv run pytest -v` — all **8 tests**.
-3. Pytest step has `continue-on-error: true`: the 2 expected demo failures emit a
-   `::warning::` in the log but never turn the workflow red.
+2. Install **Xvfb**, then run pytest in **two separate steps** under
+   `xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24'`:
+   * `Pytest (production)` — `uv run pytest -v -m "not demo"` (the 6
+     production tests). **No** `continue-on-error` — a real regression
+     turns the workflow red here.
+   * `Pytest (demo / intentional failures)` — `uv run pytest -v -m "demo"`
+     (the 2 expected-fail tests) with `continue-on-error: true` and
+     `PYTEST_SUMMARY_APPEND=1`. The append flag tells
+     `utils.pytest_summary` to merge this run's counts into the prior
+     step's `reports/summary.json` so downstream consumers (Notion,
+     GitHub step summaries) see the full 8-test picture.
+3. If the demo step records failures, a `::warning::` is emitted in the
+   CI log; the build stays green because the demo step has
+   `continue-on-error: true`.
 4. Upload Allure results, HTML report, summary JSON, screenshots, traces.
 5. Allure report published to GitHub Pages by `allure-report.yml`.
 6. Notion row posted by `scripts/push_to_notion.py` (fail-open).
