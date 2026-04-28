@@ -52,6 +52,10 @@ reports/screenshots/*
 # Optional: Allure CLI output at repo root (not reports/allure-results/)
 /allure-results/
 /allure-report/
+# Local-only Allure HTML scratch dirs from `allure generate -o ...`
+# (e.g. cache-busting / single-file investigations).  These are large,
+# regenerable on demand, and must never be committed.
+/_allure_*/
 *.log
 
 # Playwright
