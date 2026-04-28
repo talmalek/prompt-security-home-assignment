@@ -31,14 +31,16 @@ The user-data directory and Playwright trace zip are uniquely keyed by pytest
 from __future__ import annotations
 
 import asyncio
+import io
 import shutil
 import time
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from loguru import logger as _loguru
 from playwright.async_api import BrowserContext, async_playwright
 from pydantic import SecretStr
 
@@ -465,6 +467,53 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) ->
     setattr(item, "rep_" + rep.when, rep)
 
 
+@contextmanager
+def _per_test_log_sink(request: pytest.FixtureRequest) -> Iterator[io.StringIO]:
+    """Install a per-test loguru sink that captures into an in-memory buffer.
+
+    The default loguru sinks (``utils/logger.configure_logging``) are
+    *session-scoped* and write to a single shared ``reports/logs/test-run.jsonl``,
+    so log records from every test interleave there.  This helper adds a
+    third sink, alive only for the lifetime of one test, that records into a
+    ``StringIO`` exposed via ``request.instance.test_log_buffer``.  The
+    captured text is attached to the active Allure ``TestResult`` as
+    ``test_log`` on context exit so each test displays *only* its own log
+    in the report.
+
+    Format mirrors the stderr sink so the Allure attachment is visually
+    consistent with what a developer sees in the CI live log.
+
+    Sink ID is removed in the ``finally`` clause; we swallow ``ValueError``
+    in case loguru already removed it (e.g. a misconfigured worker thread).
+    """
+    buffer = io.StringIO()
+    sink_id = _loguru.add(
+        buffer,
+        level=settings.log.level.upper(),
+        format="{time:HH:mm:ss} | {level: <8} | {message}",
+        serialize=False,
+    )
+    request.instance.test_log_buffer = buffer
+    try:
+        yield buffer
+    finally:
+        # Attach captured text to the Allure TestResult before removing the
+        # sink. ``attach_text`` resolves the active TestResult via
+        # ``utils.reporting._attach_to_active_test`` so the attachment lands
+        # on the test (not on the fixture's after_fixture container — same
+        # rationale as ``failure_screenshot``).
+        try:
+            captured = buffer.getvalue()
+            if captured:
+                attach_text(captured, name="test_log")
+        except Exception:  # noqa: BLE001 — never let log-attach fail teardown
+            pass
+        try:
+            _loguru.remove(sink_id)
+        except ValueError:
+            pass
+
+
 async def _capture_failure_artifacts(request: pytest.FixtureRequest) -> None:
     """Capture failure screenshot + page source while the page is still alive.
 
@@ -537,15 +586,20 @@ async def browser_context_plain(request: pytest.FixtureRequest) -> AsyncIterator
     ``chrome_extension_id = None`` are written to ``self`` so the test methods
     (and ``_capture_failure_artifacts`` via ``_resolve_failure_page``) can
     reach them via ``request.instance``.
+
+    Wrapped in :func:`_per_test_log_sink` so each test gets its own ``test_log``
+    Allure attachment instead of sharing the session-wide
+    ``reports/logs/test-run.jsonl``.
     """
     instance_id = _instance_id_for(request)
-    async with _persistent_context_lifecycle(instance_id=instance_id, with_extension=False) as (ctx, _):
-        request.instance.context = ctx
-        request.instance.chrome_extension_id = None
-        try:
-            yield
-        finally:
-            await _capture_failure_artifacts(request)
+    with _per_test_log_sink(request):
+        async with _persistent_context_lifecycle(instance_id=instance_id, with_extension=False) as (ctx, _):
+            request.instance.context = ctx
+            request.instance.chrome_extension_id = None
+            try:
+                yield
+            finally:
+                await _capture_failure_artifacts(request)
 
 
 @pytest.fixture
@@ -562,15 +616,19 @@ async def browser_context_with_extension(request: pytest.FixtureRequest) -> Asyn
            ``--disable-extensions-except``.
         2. Resolves its runtime ``chrome-extension://<id>``.
         3. Opens the popup once and saves the API domain + key.
+
+    Wrapped in :func:`_per_test_log_sink` so each test gets its own ``test_log``
+    Allure attachment.
     """
     instance_id = _instance_id_for(request)
-    async with _persistent_context_lifecycle(instance_id=instance_id, with_extension=True) as (ctx, ext_id):
-        request.instance.context = ctx
-        request.instance.chrome_extension_id = ext_id
-        try:
-            yield
-        finally:
-            await _capture_failure_artifacts(request)
+    with _per_test_log_sink(request):
+        async with _persistent_context_lifecycle(instance_id=instance_id, with_extension=True) as (ctx, ext_id):
+            request.instance.context = ctx
+            request.instance.chrome_extension_id = ext_id
+            try:
+                yield
+            finally:
+                await _capture_failure_artifacts(request)
 
 
 @pytest.fixture

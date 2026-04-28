@@ -84,7 +84,12 @@ import allure
 import pytest
 from pydantic import SecretStr
 
-from tests.conftest import _capture_failure_artifacts, _instance_id_for, _persistent_context_lifecycle
+from tests.conftest import (
+    _capture_failure_artifacts,
+    _instance_id_for,
+    _per_test_log_sink,
+    _persistent_context_lifecycle,
+)
 from tests.pages.web_app_page import CLAUDE, GEMINI
 from tests.ui.test_policy_enforcement import run_block_assertion
 from utils.logger import logger
@@ -137,18 +142,19 @@ async def browser_context_with_open_extension(
     similar fixture and pass its key via ``api_key_override``.
     """
     instance_id = _instance_id_for(request)
-    async with _persistent_context_lifecycle(
-        instance_id=instance_id,
-        with_extension=True,
-        api_key_override=_OPEN_POLICY_API_KEY,
-        wait_for_block_active=False,
-    ) as (ctx, ext_id):
-        request.instance.context = ctx
-        request.instance.chrome_extension_id = ext_id
-        try:
-            yield
-        finally:
-            await _capture_failure_artifacts(request)
+    with _per_test_log_sink(request):
+        async with _persistent_context_lifecycle(
+            instance_id=instance_id,
+            with_extension=True,
+            api_key_override=_OPEN_POLICY_API_KEY,
+            wait_for_block_active=False,
+        ) as (ctx, ext_id):
+            request.instance.context = ctx
+            request.instance.chrome_extension_id = ext_id
+            try:
+                yield
+            finally:
+                await _capture_failure_artifacts(request)
 
 
 @allure.epic("Prompt Security")
